@@ -5,13 +5,17 @@ This folder contains a Linux installer designed for one-line partner onboarding.
 ## One-Liner
 
 ```bash
-curl -fsSL https://install.example.com/partner-node/install.sh | sudo bash -s -- \
+curl -fsSL https://raw.githubusercontent.com/<org>/partner-node-installer/main/scripts/install.sh | sudo bash -s -- \
   --partner-key <KEY> \
   --country US \
   --main-server https://main.example.com \
-  --install-mode binary \
-  --binary-url https://downloads.example.com/partner-node/v0.1.0/node-agent-linux-amd64
+  --install-mode binary
 ```
+
+Default binary URL already points to:
+`http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.0`
+
+If you host another build, override with `--binary-url`.
 
 ## What It Does
 
@@ -27,11 +31,11 @@ curl -fsSL https://install.example.com/partner-node/install.sh | sudo bash -s --
 
 ## Important Flags
 
-- `--partner-key` (required)
+- `--partner-key` (required in non-interactive mode)
 - `--country` (default `US`)
 - `--main-server` (default `https://main.example.com`)
 - `--install-mode` (`binary` or `source`)
-- `--binary-url` (recommended in `binary` mode)
+- `--binary-url` (optional; default is test host URL above)
 - `--repo-url` and `--repo-ref` (for `source` mode)
 - `--skip-start` (install only)
 
@@ -47,4 +51,3 @@ journalctl -u partner-node -f
 - The script is intended for Linux partner nodes.
 - Provide real download URLs before production use.
 - Keep installer and binaries behind HTTPS with integrity verification in production.
-

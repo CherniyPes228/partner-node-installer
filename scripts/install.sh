@@ -15,7 +15,7 @@ INSTALL_MODE="binary" # binary | source
 VERSION="latest"
 REPO_URL="https://github.com/example/partner-node.git"
 REPO_REF="main"
-BINARY_URL=""
+BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.0"
 DOCTOR_BINARY_URL=""
 INSTALL_PREFIX="/usr/local/bin"
 CONFIG_DIR="/etc/partner-node"
@@ -39,11 +39,11 @@ usage() {
 Zero-touch installer for partner-node.
 
 Required:
-  --partner-key <key>
+  --partner-key <key>            Optional if interactive TTY is available.
 
 Optional:
   --country <code>                Default: US
-  --main-server <url>             Default: https://main.example.com
+  --main-server <url>             Default: https://main.example.com (prompted if unchanged)
   --install-mode <binary|source>  Default: binary
   --version <tag|latest>          Default: latest
   --repo-url <git-url>            Default: https://github.com/example/partner-node.git
@@ -54,6 +54,27 @@ Optional:
   --skip-start                    Install only, do not start service
   --help
 EOF
+}
+
+is_tty() {
+  [[ -t 0 || -t 1 ]]
+}
+
+prompt_if_needed() {
+  if [[ -z "${PARTNER_KEY}" ]]; then
+    if is_tty; then
+      read -r -p "Enter partner key: " PARTNER_KEY
+    fi
+  fi
+
+  if [[ "${MAIN_SERVER}" == "https://main.example.com" ]]; then
+    if is_tty; then
+      read -r -p "Enter MAIN server URL (e.g. https://main.yourdomain.com): " input_main
+      if [[ -n "${input_main}" ]]; then
+        MAIN_SERVER="${input_main}"
+      fi
+    fi
+  fi
 }
 
 require_root() {
@@ -138,12 +159,16 @@ install_from_binary() {
 
   if [[ -n "${BINARY_URL}" ]]; then
     url="${BINARY_URL}"
-  else
-    if [[ "${VERSION}" == "latest" ]]; then
-      log_err "When --install-mode=binary and --version=latest, provide --binary-url."
-      exit 1
-    fi
+  elif [[ "${VERSION}" != "latest" ]]; then
     url="https://downloads.example.com/partner-node/${VERSION}/node-agent-linux-${arch}"
+  else
+    log_err "No binary URL available. Provide --binary-url."
+    exit 1
+  fi
+
+  if [[ "${arch}" != "amd64" && "${url}" == "http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.0" ]]; then
+    log_err "Default binary is amd64-only. Provide --binary-url for ${arch}."
+    exit 1
   fi
 
   log_info "Downloading node-agent binary from ${url}"
@@ -309,9 +334,15 @@ parse_args() {
 main() {
   parse_args "$@"
   require_root
+  prompt_if_needed
 
   if [[ -z "${PARTNER_KEY}" ]]; then
-    log_err "--partner-key is required."
+    log_err "--partner-key is required (or provide it interactively)."
+    usage
+    exit 1
+  fi
+  if [[ "${MAIN_SERVER}" == "https://main.example.com" ]]; then
+    log_err "Set --main-server (placeholder URL is not allowed)."
     usage
     exit 1
   fi
@@ -347,4 +378,3 @@ main() {
 }
 
 main "$@"
-
