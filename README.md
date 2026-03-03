@@ -8,8 +8,7 @@ This folder contains a Linux installer designed for one-line partner onboarding.
 curl -fsSL https://raw.githubusercontent.com/<org>/partner-node-installer/main/scripts/install.sh | sudo bash -s -- \
   --partner-key <KEY> \
   --country US \
-  --main-server https://main.example.com \
-  --install-mode binary
+  --main-server http://<main-server-ip>:18080
 ```
 
 Default binary URL already points to:
@@ -33,10 +32,8 @@ If you host another build, override with `--binary-url`.
 
 - `--partner-key` (required in non-interactive mode)
 - `--country` (default `US`)
-- `--main-server` (default `https://main.example.com`)
-- `--install-mode` (`binary` or `source`)
+- `--main-server` (required in non-interactive mode)
 - `--binary-url` (optional; default is test host URL above)
-- `--repo-url` and `--repo-ref` (for `source` mode)
 - `--skip-start` (install only)
 
 ## Post-Install Checks

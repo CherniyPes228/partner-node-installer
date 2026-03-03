@@ -10,11 +10,7 @@ set -euo pipefail
 
 PARTNER_KEY=""
 COUNTRY="US"
-MAIN_SERVER="https://main.example.com"
-INSTALL_MODE="binary" # binary | source
-VERSION="latest"
-REPO_URL="https://github.com/example/partner-node.git"
-REPO_REF="main"
+MAIN_SERVER=""
 BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.0"
 DOCTOR_BINARY_URL=""
 INSTALL_PREFIX="/usr/local/bin"
@@ -43,11 +39,7 @@ Required:
 
 Optional:
   --country <code>                Default: US
-  --main-server <url>             Default: https://main.example.com (prompted if unchanged)
-  --install-mode <binary|source>  Default: binary
-  --version <tag|latest>          Default: latest
-  --repo-url <git-url>            Default: https://github.com/example/partner-node.git
-  --repo-ref <branch|tag|sha>     Default: main
+  --main-server <url>             Required in non-interactive mode
   --binary-url <url>              Direct URL to node-agent binary
   --doctor-binary-url <url>       Direct URL to doctor binary
   --install-prefix <dir>          Default: /usr/local/bin
@@ -67,7 +59,7 @@ prompt_if_needed() {
     fi
   fi
 
-  if [[ "${MAIN_SERVER}" == "https://main.example.com" ]]; then
+  if [[ -z "${MAIN_SERVER}" ]]; then
     if is_tty; then
       read -r -p "Enter MAIN server URL (e.g. https://main.yourdomain.com): " input_main </dev/tty
       if [[ -n "${input_main}" ]]; then
@@ -121,23 +113,6 @@ install_packages() {
   esac
 }
 
-ensure_go() {
-  if command -v go >/dev/null 2>&1; then
-    return
-  fi
-  local pkg_mgr="$1"
-  log_info "Go not found. Installing Go toolchain..."
-  case "${pkg_mgr}" in
-    apt) apt-get install -y golang-go ;;
-    dnf) dnf install -y golang ;;
-    yum) yum install -y golang ;;
-  esac
-  if ! command -v go >/dev/null 2>&1; then
-    log_err "Failed to install Go."
-    exit 1
-  fi
-}
-
 arch_to_go() {
   local machine
   machine="$(uname -m)"
@@ -159,8 +134,6 @@ install_from_binary() {
 
   if [[ -n "${BINARY_URL}" ]]; then
     url="${BINARY_URL}"
-  elif [[ "${VERSION}" != "latest" ]]; then
-    url="https://downloads.example.com/partner-node/${VERSION}/node-agent-linux-${arch}"
   else
     log_err "No binary URL available. Provide --binary-url."
     exit 1
@@ -181,22 +154,6 @@ install_from_binary() {
     curl -fsSL "${doctor_url}" -o "${tmpdir}/doctor"
     install -m 0755 "${tmpdir}/doctor" "${INSTALL_PREFIX}/doctor"
   fi
-}
-
-install_from_source() {
-  local src_dir
-  src_dir="/opt/partner-node-src"
-  rm -rf "${src_dir}"
-  log_info "Cloning ${REPO_URL} (${REPO_REF})"
-  git clone --depth 1 --branch "${REPO_REF}" "${REPO_URL}" "${src_dir}"
-  pushd "${src_dir}" >/dev/null
-  log_info "Building binaries from source"
-  go mod download
-  go build -o "${INSTALL_PREFIX}/node-agent" ./cmd/node-agent
-  go build -o "${INSTALL_PREFIX}/doctor" ./cmd/doctor || true
-  popd >/dev/null
-  chmod 0755 "${INSTALL_PREFIX}/node-agent"
-  [[ -f "${INSTALL_PREFIX}/doctor" ]] && chmod 0755 "${INSTALL_PREFIX}/doctor"
 }
 
 create_user_and_dirs() {
@@ -313,10 +270,6 @@ parse_args() {
       --partner-key) PARTNER_KEY="${2:-}"; shift 2 ;;
       --country) COUNTRY="${2:-}"; shift 2 ;;
       --main-server) MAIN_SERVER="${2:-}"; shift 2 ;;
-      --install-mode) INSTALL_MODE="${2:-}"; shift 2 ;;
-      --version) VERSION="${2:-}"; shift 2 ;;
-      --repo-url) REPO_URL="${2:-}"; shift 2 ;;
-      --repo-ref) REPO_REF="${2:-}"; shift 2 ;;
       --binary-url) BINARY_URL="${2:-}"; shift 2 ;;
       --doctor-binary-url) DOCTOR_BINARY_URL="${2:-}"; shift 2 ;;
       --install-prefix) INSTALL_PREFIX="${2:-}"; shift 2 ;;
@@ -341,13 +294,9 @@ main() {
     usage
     exit 1
   fi
-  if [[ "${MAIN_SERVER}" == "https://main.example.com" ]]; then
-    log_err "Set --main-server (placeholder URL is not allowed)."
+  if [[ -z "${MAIN_SERVER}" ]]; then
+    log_err "Set --main-server (or provide it interactively)."
     usage
-    exit 1
-  fi
-  if [[ "${INSTALL_MODE}" != "binary" && "${INSTALL_MODE}" != "source" ]]; then
-    log_err "--install-mode must be binary or source."
     exit 1
   fi
 
@@ -356,13 +305,7 @@ main() {
   pkg_mgr="$(detect_pkg_manager)"
   log_info "Detected package manager: ${pkg_mgr}"
   install_packages "${pkg_mgr}"
-
-  if [[ "${INSTALL_MODE}" == "binary" ]]; then
-    install_from_binary
-  else
-    ensure_go "${pkg_mgr}"
-    install_from_source
-  fi
+  install_from_binary
 
   create_user_and_dirs
   write_config
