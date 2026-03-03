@@ -130,7 +130,6 @@ install_from_binary() {
   local arch url doctor_url tmpdir
   arch="$(arch_to_go)"
   tmpdir="$(mktemp -d)"
-  trap 'rm -rf "${tmpdir}"' EXIT
 
   if [[ -n "${BINARY_URL}" ]]; then
     url="${BINARY_URL}"
@@ -154,6 +153,8 @@ install_from_binary() {
     curl -fsSL "${doctor_url}" -o "${tmpdir}/doctor"
     install -m 0755 "${tmpdir}/doctor" "${INSTALL_PREFIX}/doctor"
   fi
+
+  rm -rf "${tmpdir}"
 }
 
 create_user_and_dirs() {
