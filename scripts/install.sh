@@ -57,19 +57,19 @@ EOF
 }
 
 is_tty() {
-  [[ -t 0 || -t 1 ]]
+  [[ -r /dev/tty ]]
 }
 
 prompt_if_needed() {
   if [[ -z "${PARTNER_KEY}" ]]; then
     if is_tty; then
-      read -r -p "Enter partner key: " PARTNER_KEY
+      read -r -p "Enter partner key: " PARTNER_KEY </dev/tty
     fi
   fi
 
   if [[ "${MAIN_SERVER}" == "https://main.example.com" ]]; then
     if is_tty; then
-      read -r -p "Enter MAIN server URL (e.g. https://main.yourdomain.com): " input_main
+      read -r -p "Enter MAIN server URL (e.g. https://main.yourdomain.com): " input_main </dev/tty
       if [[ -n "${input_main}" ]]; then
         MAIN_SERVER="${input_main}"
       fi
