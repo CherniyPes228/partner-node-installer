@@ -5,13 +5,13 @@ set -euo pipefail
 # Partner Node Zero-Touch Installer (Linux)
 # Usage (recommended):
 #   curl -fsSL https://install.example.com/partner-node/install.sh | \
-#     sudo bash -s -- --partner-key <KEY> --country US --main-server https://main.example.com
+#     sudo bash -s -- --partner-key <KEY> --main-server https://main.example.com
 ###############################################################################
 
 PARTNER_KEY=""
-COUNTRY="US"
+COUNTRY=""
 MAIN_SERVER=""
-BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.3"
+BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.4"
 DOCTOR_BINARY_URL=""
 MODEM_ROTATION_METHOD="auto" # auto|mmcli|api
 HILINK_ENABLED="true"
@@ -42,10 +42,10 @@ Required:
   --partner-key <key>            Optional if interactive TTY is available.
 
 Optional:
-  --country <code>                Default: US
+  --country <code>                Optional; auto-detected from public IP (fallback: US)
   --main-server <url>             Required in non-interactive mode
   --binary-url <url>              Direct URL to node-agent binary
-  --modem-rotation-method <m>     auto|mmcli|api (default: auto)
+  --modem-rotation-method <m>     auto|mmcli|api|api_reboot (default: auto)
   --hilink-enabled <true|false>   Default: true
   --hilink-base-url <url>         Example: http://192.168.13.1
   --hilink-timeout <duration>     Default: 15s
@@ -146,7 +146,7 @@ install_from_binary() {
     exit 1
   fi
 
-  if [[ "${arch}" != "amd64" && "${url}" == "http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.3" ]]; then
+  if [[ "${arch}" != "amd64" && "${url}" == "http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.4" ]]; then
     log_err "Default binary is amd64-only. Provide --binary-url for ${arch}."
     exit 1
   fi
@@ -180,6 +180,27 @@ autodetect_hilink_base_url() {
       return 0
     fi
   done
+
+  return 1
+}
+
+autodetect_country() {
+  local value
+  value="$(curl -fsS --max-time 5 https://ipapi.co/country 2>/dev/null || true)"
+  value="$(echo "${value}" | tr '[:lower:]' '[:upper:]' | tr -d '\r\n[:space:]')"
+  if [[ "${value}" =~ ^[A-Z]{2}$ ]]; then
+    COUNTRY="${value}"
+    log_info "Detected country from IP: ${COUNTRY}"
+    return 0
+  fi
+
+  value="$(curl -fsS --max-time 5 https://ipinfo.io/country 2>/dev/null || true)"
+  value="$(echo "${value}" | tr '[:lower:]' '[:upper:]' | tr -d '\r\n[:space:]')"
+  if [[ "${value}" =~ ^[A-Z]{2}$ ]]; then
+    COUNTRY="${value}"
+    log_info "Detected country from IP: ${COUNTRY}"
+    return 0
+  fi
 
   return 1
 }
@@ -337,8 +358,8 @@ main() {
     usage
     exit 1
   fi
-  if [[ "${MODEM_ROTATION_METHOD}" != "auto" && "${MODEM_ROTATION_METHOD}" != "mmcli" && "${MODEM_ROTATION_METHOD}" != "api" ]]; then
-    log_err "--modem-rotation-method must be auto, mmcli or api."
+  if [[ "${MODEM_ROTATION_METHOD}" != "auto" && "${MODEM_ROTATION_METHOD}" != "mmcli" && "${MODEM_ROTATION_METHOD}" != "api" && "${MODEM_ROTATION_METHOD}" != "api_reboot" ]]; then
+    log_err "--modem-rotation-method must be auto, mmcli, api or api_reboot."
     exit 1
   fi
 
@@ -353,6 +374,13 @@ main() {
     if ! autodetect_hilink_base_url; then
       log_warn "HiLink auto-detect failed. Falling back to http://192.168.13.1"
       HILINK_BASE_URL="http://192.168.13.1"
+    fi
+  fi
+
+  if [[ -z "${COUNTRY}" ]]; then
+    if ! autodetect_country; then
+      COUNTRY="US"
+      log_warn "Country auto-detect failed. Falling back to ${COUNTRY}."
     fi
   fi
 
