@@ -12,7 +12,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/partner-node-installer/main/s
 ```
 
 Default binary URL already points to:
-`http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.1`
+`http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.2`
 
 If you host another build, override with `--binary-url`.
 
@@ -21,9 +21,7 @@ If you host another build, override with `--binary-url`.
 1. Validates root privileges.
 2. Detects package manager (`apt`, `dnf`, `yum`).
 3. Installs runtime dependencies (`wireguard-tools`, `modemmanager`, `3proxy`, etc.).
-4. Installs `node-agent`:
-   - `binary` mode: downloads prebuilt binary.
-   - `source` mode: clones repo and builds with Go.
+4. Installs `node-agent` by downloading prebuilt binary.
 5. Writes config to `/etc/partner-node/config.yaml`.
 6. Installs systemd unit `/etc/systemd/system/partner-node.service`.
 7. Enables and starts `partner-node`.

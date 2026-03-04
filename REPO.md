@@ -12,6 +12,5 @@ It contains only the public zero-touch onboarding installer for partner Linux no
 curl -fsSL https://raw.githubusercontent.com/<org>/partner-node-installer/main/scripts/install.sh | sudo bash -s -- \
   --partner-key <KEY> \
   --country US \
-  --main-server https://main.example.com \
-  --install-mode source
+  --main-server https://main.example.com
 ```
