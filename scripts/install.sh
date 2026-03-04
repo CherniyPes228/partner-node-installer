@@ -18,6 +18,7 @@ HILINK_ENABLED="true"
 HILINK_BASE_URL=""
 HILINK_TIMEOUT="15s"
 THREEPROXY_VERSION="0.9.5"
+THREEPROXY_PACKAGE_URL="https://chatmod-test.warforgalaxy.com/downloads/partner-node/3proxy.deb"
 INSTALL_PREFIX="/usr/local/bin"
 CONFIG_DIR="/etc/partner-node"
 DATA_DIR="/var/lib/partner-node"
@@ -52,6 +53,7 @@ Optional:
   --hilink-base-url <url>         Example: http://192.168.13.1
   --hilink-timeout <duration>     Default: 15s
   --doctor-binary-url <url>       Direct URL to doctor binary
+  --threeproxy-package-url <url>  Custom 3proxy package URL (.rpm/.deb)
   --install-prefix <dir>          Default: /usr/local/bin
   --skip-start                    Install only, do not start service
   --help
@@ -185,6 +187,97 @@ install_3proxy_fallback() {
   rm -rf "${tmpdir}"
 }
 
+install_3proxy_from_custom_package() {
+  local pkg_mgr="$1"
+  local url="${THREEPROXY_PACKAGE_URL}"
+  local tmpdir file ext
+
+  if [[ -z "${url}" ]]; then
+    return 1
+  fi
+
+  tmpdir="$(mktemp -d)"
+  file="${tmpdir}/3proxy.pkg"
+  log_info "Trying custom 3proxy package: ${url}"
+  if ! curl -fsSL "${url}" -o "${file}"; then
+    rm -rf "${tmpdir}"
+    return 1
+  fi
+
+  ext="${url##*.}"
+  case "${pkg_mgr}" in
+    apt)
+      if [[ "${ext}" == "deb" ]]; then
+        if apt-get install -y "${file}"; then
+          rm -rf "${tmpdir}"
+          return 0
+        fi
+      else
+        log_warn "Custom 3proxy package is .${ext}; apt expects .deb. Skipping."
+      fi
+      ;;
+    dnf)
+      if [[ "${ext}" == "rpm" ]]; then
+        if dnf install -y "${file}"; then
+          rm -rf "${tmpdir}"
+          return 0
+        fi
+      else
+        log_warn "Custom 3proxy package is .${ext}; dnf expects .rpm. Skipping."
+      fi
+      ;;
+    yum)
+      if [[ "${ext}" == "rpm" ]]; then
+        if yum install -y "${file}"; then
+          rm -rf "${tmpdir}"
+          return 0
+        fi
+      else
+        log_warn "Custom 3proxy package is .${ext}; yum expects .rpm. Skipping."
+      fi
+      ;;
+  esac
+
+  rm -rf "${tmpdir}"
+  return 1
+}
+
+install_3proxy_from_github_deb() {
+  local pkg_mgr="$1"
+  local deb_arch candidates=() tmpdir url suffix installed=1
+
+  if [[ "${pkg_mgr}" != "apt" ]]; then
+    return 1
+  fi
+  if ! command -v dpkg >/dev/null 2>&1; then
+    return 1
+  fi
+
+  deb_arch="$(dpkg --print-architecture 2>/dev/null || true)"
+  case "${deb_arch}" in
+    amd64) candidates=("x86_64") ;;
+    arm64) candidates=("aarch64" "arm64") ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  tmpdir="$(mktemp -d)"
+  for suffix in "${candidates[@]}"; do
+    url="https://github.com/3proxy/3proxy/releases/download/${THREEPROXY_VERSION}/3proxy-${THREEPROXY_VERSION}.${suffix}.deb"
+    log_info "Trying 3proxy GitHub package: ${url}"
+    if curl -fsSL "${url}" -o "${tmpdir}/3proxy.deb"; then
+      if apt-get install -y "${tmpdir}/3proxy.deb"; then
+        installed=0
+        break
+      fi
+    fi
+  done
+
+  rm -rf "${tmpdir}"
+  return "${installed}"
+}
+
 install_3proxy_from_repo_if_available() {
   local pkg_mgr="$1"
   case "${pkg_mgr}" in
@@ -218,6 +311,26 @@ ensure_3proxy() {
   if command -v 3proxy >/dev/null 2>&1; then
     PROXY_BINARY_PATH="$(command -v 3proxy)"
     log_info "Found 3proxy at ${PROXY_BINARY_PATH}"
+    return 0
+  fi
+
+  if [[ -n "${pkg_mgr}" ]]; then
+    install_3proxy_from_custom_package "${pkg_mgr}" || true
+  fi
+
+  if command -v 3proxy >/dev/null 2>&1; then
+    PROXY_BINARY_PATH="$(command -v 3proxy)"
+    log_info "Installed 3proxy from custom package at ${PROXY_BINARY_PATH}"
+    return 0
+  fi
+
+  if [[ -n "${pkg_mgr}" ]]; then
+    install_3proxy_from_github_deb "${pkg_mgr}" || true
+  fi
+
+  if command -v 3proxy >/dev/null 2>&1; then
+    PROXY_BINARY_PATH="$(command -v 3proxy)"
+    log_info "Installed 3proxy from GitHub package at ${PROXY_BINARY_PATH}"
     return 0
   fi
 
@@ -440,6 +553,7 @@ parse_args() {
       --hilink-base-url) HILINK_BASE_URL="${2:-}"; shift 2 ;;
       --hilink-timeout) HILINK_TIMEOUT="${2:-}"; shift 2 ;;
       --doctor-binary-url) DOCTOR_BINARY_URL="${2:-}"; shift 2 ;;
+      --threeproxy-package-url) THREEPROXY_PACKAGE_URL="${2:-}"; shift 2 ;;
       --install-prefix) INSTALL_PREFIX="${2:-}"; shift 2 ;;
       --skip-start) SKIP_START="true"; shift ;;
       --help|-h) usage; exit 0 ;;
