@@ -17,10 +17,12 @@ MODEM_ROTATION_METHOD="auto" # auto|mmcli|api
 HILINK_ENABLED="true"
 HILINK_BASE_URL=""
 HILINK_TIMEOUT="15s"
+THREEPROXY_VERSION="0.9.5"
 INSTALL_PREFIX="/usr/local/bin"
 CONFIG_DIR="/etc/partner-node"
 DATA_DIR="/var/lib/partner-node"
 LOG_DIR="/var/log/partner-node"
+PROXY_BINARY_PATH="/usr/bin/3proxy"
 SERVICE_NAME="partner-node"
 RUN_USER="partner-node"
 SKIP_START="false"
@@ -107,15 +109,16 @@ install_packages() {
     apt)
       export DEBIAN_FRONTEND=noninteractive
       apt-get update -y
-      apt-get install -y ca-certificates curl git tar gzip jq systemd systemd-sysv
-      apt-get install -y wireguard-tools modemmanager 3proxy || true
+      apt-get install -y ca-certificates curl git tar gzip jq systemd systemd-sysv build-essential
+      apt-get install -y wireguard-tools modemmanager || true
+      apt-get install -y 3proxy || true
       ;;
     dnf)
-      dnf install -y ca-certificates curl git tar gzip jq systemd
+      dnf install -y ca-certificates curl git tar gzip jq systemd gcc make
       dnf install -y wireguard-tools ModemManager 3proxy || true
       ;;
     yum)
-      yum install -y ca-certificates curl git tar gzip jq systemd
+      yum install -y ca-certificates curl git tar gzip jq systemd gcc make
       yum install -y wireguard-tools ModemManager 3proxy || true
       ;;
   esac
@@ -163,6 +166,44 @@ install_from_binary() {
   fi
 
   rm -rf "${tmpdir}"
+}
+
+install_3proxy_fallback() {
+  local tmpdir archive_url
+  tmpdir="$(mktemp -d)"
+  archive_url="https://github.com/3proxy/3proxy/archive/refs/tags/${THREEPROXY_VERSION}.tar.gz"
+
+  log_warn "3proxy package not found, building from source (${THREEPROXY_VERSION})"
+  curl -fsSL "${archive_url}" -o "${tmpdir}/3proxy.tar.gz"
+  tar -xzf "${tmpdir}/3proxy.tar.gz" -C "${tmpdir}"
+
+  pushd "${tmpdir}/3proxy-${THREEPROXY_VERSION}" >/dev/null
+  make -f Makefile.Linux
+  install -m 0755 ./bin/3proxy "${INSTALL_PREFIX}/3proxy"
+  popd >/dev/null
+
+  ln -sf "${INSTALL_PREFIX}/3proxy" /usr/bin/3proxy
+  rm -rf "${tmpdir}"
+}
+
+ensure_3proxy() {
+  if command -v 3proxy >/dev/null 2>&1; then
+    PROXY_BINARY_PATH="$(command -v 3proxy)"
+    log_info "Found 3proxy at ${PROXY_BINARY_PATH}"
+    return 0
+  fi
+
+  install_3proxy_fallback
+
+  if command -v 3proxy >/dev/null 2>&1; then
+    PROXY_BINARY_PATH="$(command -v 3proxy)"
+    log_info "Installed 3proxy at ${PROXY_BINARY_PATH}"
+    return 0
+  fi
+
+  log_warn "3proxy installation failed; proxy manager may not start."
+  PROXY_BINARY_PATH="/usr/bin/3proxy"
+  return 1
 }
 
 autodetect_hilink_base_url() {
@@ -241,7 +282,7 @@ modem:
     timeout: "${HILINK_TIMEOUT}"
 
 proxy:
-  binary_path: "/usr/bin/3proxy"
+  binary_path: "${PROXY_BINARY_PATH}"
   config_path: "/etc/3proxy/3proxy.conf"
   max_connections: 10000
   buffer_size: 65536
@@ -369,6 +410,7 @@ main() {
   log_info "Detected package manager: ${pkg_mgr}"
   install_packages "${pkg_mgr}"
   install_from_binary
+  ensure_3proxy || true
 
   if [[ "${HILINK_ENABLED}" == "true" && -z "${HILINK_BASE_URL}" ]]; then
     if ! autodetect_hilink_base_url; then

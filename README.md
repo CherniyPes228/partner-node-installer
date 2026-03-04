@@ -20,6 +20,7 @@ If you host another build, override with `--binary-url`.
 1. Validates root privileges.
 2. Detects package manager (`apt`, `dnf`, `yum`).
 3. Installs runtime dependencies (`wireguard-tools`, `modemmanager`, `3proxy`, etc.).
+   If `3proxy` is missing in distro repos, installer builds it from source automatically.
 4. Installs `node-agent` by downloading prebuilt binary.
 5. Writes config to `/etc/partner-node/config.yaml`.
 6. Installs systemd unit `/etc/systemd/system/partner-node.service`.
