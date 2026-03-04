@@ -12,7 +12,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/partner-node-installer/main/s
 ```
 
 Default binary URL already points to:
-`http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.0`
+`http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.1`
 
 If you host another build, override with `--binary-url`.
 
@@ -34,6 +34,9 @@ If you host another build, override with `--binary-url`.
 - `--country` (default `US`)
 - `--main-server` (required in non-interactive mode)
 - `--binary-url` (optional; default is test host URL above)
+- `--modem-rotation-method` (`auto`, `mmcli`, `api`; default `auto`)
+- `--hilink-enabled` (default `true`)
+- `--hilink-base-url` (optional; auto-detected if empty)
 - `--skip-start` (install only)
 
 ## Post-Install Checks

@@ -11,8 +11,12 @@ set -euo pipefail
 PARTNER_KEY=""
 COUNTRY="US"
 MAIN_SERVER=""
-BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.0"
+BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.1"
 DOCTOR_BINARY_URL=""
+MODEM_ROTATION_METHOD="auto" # auto|mmcli|api
+HILINK_ENABLED="true"
+HILINK_BASE_URL=""
+HILINK_TIMEOUT="15s"
 INSTALL_PREFIX="/usr/local/bin"
 CONFIG_DIR="/etc/partner-node"
 DATA_DIR="/var/lib/partner-node"
@@ -41,6 +45,10 @@ Optional:
   --country <code>                Default: US
   --main-server <url>             Required in non-interactive mode
   --binary-url <url>              Direct URL to node-agent binary
+  --modem-rotation-method <m>     auto|mmcli|api (default: auto)
+  --hilink-enabled <true|false>   Default: true
+  --hilink-base-url <url>         Example: http://192.168.13.1
+  --hilink-timeout <duration>     Default: 15s
   --doctor-binary-url <url>       Direct URL to doctor binary
   --install-prefix <dir>          Default: /usr/local/bin
   --skip-start                    Install only, do not start service
@@ -138,7 +146,7 @@ install_from_binary() {
     exit 1
   fi
 
-  if [[ "${arch}" != "amd64" && "${url}" == "http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.0" ]]; then
+  if [[ "${arch}" != "amd64" && "${url}" == "http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.1" ]]; then
     log_err "Default binary is amd64-only. Provide --binary-url for ${arch}."
     exit 1
   fi
@@ -155,6 +163,25 @@ install_from_binary() {
   fi
 
   rm -rf "${tmpdir}"
+}
+
+autodetect_hilink_base_url() {
+  local candidates=(
+    "http://192.168.13.1"
+    "http://192.168.8.1"
+    "http://192.168.3.1"
+    "http://192.168.1.1"
+  )
+
+  for base in "${candidates[@]}"; do
+    if curl -fsS --max-time 3 "${base}/api/webserver/SesTokInfo" >/dev/null 2>&1; then
+      HILINK_BASE_URL="${base}"
+      log_info "Detected HiLink API at ${HILINK_BASE_URL}"
+      return 0
+    fi
+  done
+
+  return 1
 }
 
 create_user_and_dirs() {
@@ -185,6 +212,12 @@ modem:
   mmcli_path: "/usr/bin/mmcli"
   discovery_interval: 30s
   health_check_interval: 60s
+  rotation:
+    default_method: "${MODEM_ROTATION_METHOD}"
+  hilink:
+    enabled: ${HILINK_ENABLED}
+    base_url: "${HILINK_BASE_URL}"
+    timeout: "${HILINK_TIMEOUT}"
 
 proxy:
   binary_path: "/usr/bin/3proxy"
@@ -272,6 +305,10 @@ parse_args() {
       --country) COUNTRY="${2:-}"; shift 2 ;;
       --main-server) MAIN_SERVER="${2:-}"; shift 2 ;;
       --binary-url) BINARY_URL="${2:-}"; shift 2 ;;
+      --modem-rotation-method) MODEM_ROTATION_METHOD="${2:-}"; shift 2 ;;
+      --hilink-enabled) HILINK_ENABLED="${2:-}"; shift 2 ;;
+      --hilink-base-url) HILINK_BASE_URL="${2:-}"; shift 2 ;;
+      --hilink-timeout) HILINK_TIMEOUT="${2:-}"; shift 2 ;;
       --doctor-binary-url) DOCTOR_BINARY_URL="${2:-}"; shift 2 ;;
       --install-prefix) INSTALL_PREFIX="${2:-}"; shift 2 ;;
       --skip-start) SKIP_START="true"; shift ;;
@@ -300,6 +337,10 @@ main() {
     usage
     exit 1
   fi
+  if [[ "${MODEM_ROTATION_METHOD}" != "auto" && "${MODEM_ROTATION_METHOD}" != "mmcli" && "${MODEM_ROTATION_METHOD}" != "api" ]]; then
+    log_err "--modem-rotation-method must be auto, mmcli or api."
+    exit 1
+  fi
 
   log_info "Starting partner-node zero-touch installation"
   local pkg_mgr
@@ -307,6 +348,13 @@ main() {
   log_info "Detected package manager: ${pkg_mgr}"
   install_packages "${pkg_mgr}"
   install_from_binary
+
+  if [[ "${HILINK_ENABLED}" == "true" && -z "${HILINK_BASE_URL}" ]]; then
+    if ! autodetect_hilink_base_url; then
+      log_warn "HiLink auto-detect failed. Falling back to http://192.168.13.1"
+      HILINK_BASE_URL="http://192.168.13.1"
+    fi
+  fi
 
   create_user_and_dirs
   write_config
