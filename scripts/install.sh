@@ -185,6 +185,34 @@ install_3proxy_fallback() {
   rm -rf "${tmpdir}"
 }
 
+install_3proxy_from_repo_if_available() {
+  local pkg_mgr="$1"
+  case "${pkg_mgr}" in
+    apt)
+      if apt-cache show 3proxy >/dev/null 2>&1; then
+        log_info "Installing 3proxy from apt repository"
+        apt-get install -y 3proxy
+        return $?
+      fi
+      ;;
+    dnf)
+      if dnf -q list available 3proxy >/dev/null 2>&1; then
+        log_info "Installing 3proxy from dnf repository"
+        dnf install -y 3proxy
+        return $?
+      fi
+      ;;
+    yum)
+      if yum -q list available 3proxy >/dev/null 2>&1; then
+        log_info "Installing 3proxy from yum repository"
+        yum install -y 3proxy
+        return $?
+      fi
+      ;;
+  esac
+  return 1
+}
+
 ensure_3proxy() {
   local pkg_mgr="${1:-}"
   if command -v 3proxy >/dev/null 2>&1; then
@@ -214,6 +242,36 @@ ensure_3proxy() {
   log_warn "3proxy installation failed; proxy manager may not start."
   PROXY_BINARY_PATH="/usr/bin/3proxy"
   return 1
+}
+
+ensure_3proxy_config() {
+  local conf_dir conf_path
+  conf_dir="/etc/3proxy"
+  conf_path="${conf_dir}/3proxy.conf"
+
+  mkdir -p "${conf_dir}"
+  if [[ -f "${conf_path}" && -s "${conf_path}" ]]; then
+    log_info "Found existing 3proxy config at ${conf_path}"
+    return 0
+  fi
+
+  cat > "${conf_path}" <<'EOF'
+daemon
+pidfile /var/run/3proxy.pid
+nserver 1.1.1.1
+nserver 8.8.8.8
+nscache 65536
+timeouts 1 5 30 60 180 1800 15 60
+log /var/log/3proxy/3proxy.log D
+rotate 30
+auth none
+allow *
+socks -p3128
+EOF
+
+  mkdir -p /var/log/3proxy
+  chmod 0644 "${conf_path}"
+  log_info "Created default 3proxy config at ${conf_path}"
 }
 
 autodetect_hilink_base_url() {
@@ -421,6 +479,7 @@ main() {
   install_packages "${pkg_mgr}"
   install_from_binary
   ensure_3proxy "${pkg_mgr}" || true
+  ensure_3proxy_config
 
   if [[ "${HILINK_ENABLED}" == "true" && -z "${HILINK_BASE_URL}" ]]; then
     if ! autodetect_hilink_base_url; then
@@ -450,30 +509,3 @@ main() {
 }
 
 main "$@"
-install_3proxy_from_repo_if_available() {
-  local pkg_mgr="$1"
-  case "${pkg_mgr}" in
-    apt)
-      if apt-cache show 3proxy >/dev/null 2>&1; then
-        log_info "Installing 3proxy from apt repository"
-        apt-get install -y 3proxy
-        return $?
-      fi
-      ;;
-    dnf)
-      if dnf -q list available 3proxy >/dev/null 2>&1; then
-        log_info "Installing 3proxy from dnf repository"
-        dnf install -y 3proxy
-        return $?
-      fi
-      ;;
-    yum)
-      if yum -q list available 3proxy >/dev/null 2>&1; then
-        log_info "Installing 3proxy from yum repository"
-        yum install -y 3proxy
-        return $?
-      fi
-      ;;
-  esac
-  return 1
-}

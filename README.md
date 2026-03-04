@@ -23,8 +23,9 @@ If you host another build, override with `--binary-url`.
    If `3proxy` is missing in distro repos, installer builds it from source automatically.
 4. Installs `node-agent` by downloading prebuilt binary.
 5. Writes config to `/etc/partner-node/config.yaml`.
-6. Installs systemd unit `/etc/systemd/system/partner-node.service`.
-7. Enables and starts `partner-node`.
+6. Ensures `/etc/3proxy/3proxy.conf` exists (creates default config if missing).
+7. Installs systemd unit `/etc/systemd/system/partner-node.service`.
+8. Enables and starts `partner-node`.
 
 ## Important Flags
 
