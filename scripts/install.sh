@@ -111,15 +111,14 @@ install_packages() {
       apt-get update -y
       apt-get install -y ca-certificates curl git tar gzip jq systemd systemd-sysv build-essential
       apt-get install -y wireguard-tools modemmanager || true
-      apt-get install -y 3proxy || true
       ;;
     dnf)
       dnf install -y ca-certificates curl git tar gzip jq systemd gcc make
-      dnf install -y wireguard-tools ModemManager 3proxy || true
+      dnf install -y wireguard-tools ModemManager || true
       ;;
     yum)
       yum install -y ca-certificates curl git tar gzip jq systemd gcc make
-      yum install -y wireguard-tools ModemManager 3proxy || true
+      yum install -y wireguard-tools ModemManager || true
       ;;
   esac
 }
@@ -187,9 +186,20 @@ install_3proxy_fallback() {
 }
 
 ensure_3proxy() {
+  local pkg_mgr="${1:-}"
   if command -v 3proxy >/dev/null 2>&1; then
     PROXY_BINARY_PATH="$(command -v 3proxy)"
     log_info "Found 3proxy at ${PROXY_BINARY_PATH}"
+    return 0
+  fi
+
+  if [[ -n "${pkg_mgr}" ]]; then
+    install_3proxy_from_repo_if_available "${pkg_mgr}" || true
+  fi
+
+  if command -v 3proxy >/dev/null 2>&1; then
+    PROXY_BINARY_PATH="$(command -v 3proxy)"
+    log_info "Installed 3proxy from repository at ${PROXY_BINARY_PATH}"
     return 0
   fi
 
@@ -410,7 +420,7 @@ main() {
   log_info "Detected package manager: ${pkg_mgr}"
   install_packages "${pkg_mgr}"
   install_from_binary
-  ensure_3proxy || true
+  ensure_3proxy "${pkg_mgr}" || true
 
   if [[ "${HILINK_ENABLED}" == "true" && -z "${HILINK_BASE_URL}" ]]; then
     if ! autodetect_hilink_base_url; then
@@ -440,3 +450,30 @@ main() {
 }
 
 main "$@"
+install_3proxy_from_repo_if_available() {
+  local pkg_mgr="$1"
+  case "${pkg_mgr}" in
+    apt)
+      if apt-cache show 3proxy >/dev/null 2>&1; then
+        log_info "Installing 3proxy from apt repository"
+        apt-get install -y 3proxy
+        return $?
+      fi
+      ;;
+    dnf)
+      if dnf -q list available 3proxy >/dev/null 2>&1; then
+        log_info "Installing 3proxy from dnf repository"
+        dnf install -y 3proxy
+        return $?
+      fi
+      ;;
+    yum)
+      if yum -q list available 3proxy >/dev/null 2>&1; then
+        log_info "Installing 3proxy from yum repository"
+        yum install -y 3proxy
+        return $?
+      fi
+      ;;
+  esac
+  return 1
+}
