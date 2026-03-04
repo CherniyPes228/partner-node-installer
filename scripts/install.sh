@@ -11,7 +11,7 @@ set -euo pipefail
 PARTNER_KEY=""
 COUNTRY=""
 MAIN_SERVER=""
-BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.4"
+BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.10"
 DOCTOR_BINARY_URL=""
 MODEM_ROTATION_METHOD="auto" # auto|mmcli|api
 HILINK_ENABLED="true"
@@ -27,6 +27,7 @@ PROXY_BINARY_PATH="/usr/bin/3proxy"
 SERVICE_NAME="partner-node"
 RUN_USER="partner-node"
 SKIP_START="false"
+SKIP_FIREWALL="false"
 
 RED="\033[0;31m"
 GREEN="\033[0;32m"
@@ -54,6 +55,7 @@ Optional:
   --hilink-timeout <duration>     Default: 15s
   --doctor-binary-url <url>       Direct URL to doctor binary
   --threeproxy-package-url <url>  Custom 3proxy package URL (.rpm/.deb)
+  --skip-firewall                 Do not apply host firewall hardening
   --install-prefix <dir>          Default: /usr/local/bin
   --skip-start                    Install only, do not start service
   --help
@@ -150,7 +152,7 @@ install_from_binary() {
     exit 1
   fi
 
-  if [[ "${arch}" != "amd64" && "${url}" == "http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.4" ]]; then
+  if [[ "${arch}" != "amd64" && "${url}" == "http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.10" ]]; then
     log_err "Default binary is amd64-only. Provide --binary-url for ${arch}."
     exit 1
   fi
@@ -387,6 +389,59 @@ EOF
   log_info "Created default 3proxy config at ${conf_path}"
 }
 
+harden_secret_permissions() {
+  local certs_dir secrets_dir
+  certs_dir="${CONFIG_DIR}/certs"
+  secrets_dir="${CONFIG_DIR}/secrets"
+
+  chown -R root:root "${CONFIG_DIR}" || true
+  chmod 0700 "${CONFIG_DIR}" || true
+
+  if [[ -f "${CONFIG_DIR}/config.yaml" ]]; then
+    chmod 0600 "${CONFIG_DIR}/config.yaml" || true
+  fi
+
+  if [[ -d "${certs_dir}" ]]; then
+    chmod 0700 "${certs_dir}" || true
+    find "${certs_dir}" -type f -exec chmod 0600 {} \; || true
+  fi
+
+  if [[ -d "${secrets_dir}" ]]; then
+    chmod 0700 "${secrets_dir}" || true
+    find "${secrets_dir}" -type f -exec chmod 0600 {} \; || true
+  fi
+}
+
+configure_firewall() {
+  if [[ "${SKIP_FIREWALL}" == "true" ]]; then
+    log_warn "Skipping firewall hardening (--skip-firewall)."
+    return 0
+  fi
+
+  if ! command -v iptables >/dev/null 2>&1; then
+    log_warn "iptables not found; cannot enforce inbound firewall policy."
+    return 1
+  fi
+
+  # Reset INPUT policy and set strict defaults.
+  iptables -F INPUT
+  iptables -P INPUT DROP
+  iptables -P FORWARD DROP
+  iptables -P OUTPUT ACCEPT
+
+  # Allow loopback and established traffic.
+  iptables -A INPUT -i lo -j ACCEPT
+  iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+  # Keep SSH access.
+  iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+
+  # Allow 3proxy ports only via WireGuard interface.
+  iptables -A INPUT -i wg0 -p tcp --dport 31001:32000 -j ACCEPT
+
+  log_info "Firewall policy applied: incoming blocked by default; 3proxy allowed only via wg0."
+}
+
 autodetect_hilink_base_url() {
   local candidates=(
     "http://192.168.13.1"
@@ -498,6 +553,9 @@ security:
     - "restart_proxy"
     - "reconcile_config"
     - "self_check"
+    - "force_fallback"
+    - "force_primary"
+    - "transport_self_check"
 EOF
   chmod 0600 "${config_path}"
 }
@@ -556,6 +614,7 @@ parse_args() {
       --threeproxy-package-url) THREEPROXY_PACKAGE_URL="${2:-}"; shift 2 ;;
       --install-prefix) INSTALL_PREFIX="${2:-}"; shift 2 ;;
       --skip-start) SKIP_START="true"; shift ;;
+      --skip-firewall) SKIP_FIREWALL="true"; shift ;;
       --help|-h) usage; exit 0 ;;
       *)
         log_err "Unknown arg: $1"
@@ -611,6 +670,8 @@ main() {
 
   create_user_and_dirs
   write_config
+  harden_secret_permissions
+  configure_firewall || true
   write_systemd_unit
   start_service
 

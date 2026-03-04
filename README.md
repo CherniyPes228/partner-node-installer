@@ -11,7 +11,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/partner-node-installer/main/s
 ```
 
 Default binary URL already points to:
-`http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.4`
+`http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.10`
 
 If you host another build, override with `--binary-url`.
 
@@ -36,6 +36,7 @@ If you host another build, override with `--binary-url`.
 - `--binary-url` (optional; default is test host URL above)
 - `--threeproxy-package-url` (optional custom URL to 3proxy package)
   Default: `https://chatmod-test.warforgalaxy.com/downloads/partner-node/3proxy.deb`
+- `--skip-firewall` (optional; disable installer firewall hardening)
 - `--modem-rotation-method` (`auto`, `mmcli`, `api`, `api_reboot`; default `auto`)
 - `--hilink-enabled` (default `true`)
 - `--hilink-base-url` (optional; auto-detected if empty)
