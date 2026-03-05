@@ -25,6 +25,9 @@ DATA_DIR="/var/lib/partner-node"
 LOG_DIR="/var/log/partner-node"
 PROXY_BINARY_PATH="/usr/bin/3proxy"
 SERVICE_NAME="partner-node"
+UI_SERVICE_NAME="partner-node-ui"
+UI_DIR="/opt/partner-node-ui"
+UI_PORT="19090"
 RUN_USER="partner-node"
 SKIP_START="false"
 SKIP_FIREWALL="false"
@@ -56,6 +59,7 @@ Optional:
   --doctor-binary-url <url>       Direct URL to doctor binary
   --threeproxy-package-url <url>  Custom 3proxy package URL (.rpm/.deb)
   --skip-firewall                 Do not apply host firewall hardening
+  --ui-port <port>                Local partner UI port (default: 19090)
   --install-prefix <dir>          Default: /usr/local/bin
   --skip-start                    Install only, do not start service
   --help
@@ -113,15 +117,15 @@ install_packages() {
     apt)
       export DEBIAN_FRONTEND=noninteractive
       apt-get update -y
-      apt-get install -y ca-certificates curl git tar gzip jq systemd systemd-sysv build-essential
+      apt-get install -y ca-certificates curl git tar gzip jq systemd systemd-sysv build-essential python3
       apt-get install -y wireguard-tools modemmanager || true
       ;;
     dnf)
-      dnf install -y ca-certificates curl git tar gzip jq systemd gcc make
+      dnf install -y ca-certificates curl git tar gzip jq systemd gcc make python3
       dnf install -y wireguard-tools ModemManager || true
       ;;
     yum)
-      yum install -y ca-certificates curl git tar gzip jq systemd gcc make
+      yum install -y ca-certificates curl git tar gzip jq systemd gcc make python3
       yum install -y wireguard-tools ModemManager || true
       ;;
   esac
@@ -599,6 +603,277 @@ start_service() {
   fi
 }
 
+write_partner_ui_files() {
+  mkdir -p "${UI_DIR}"
+
+  cat > "${UI_DIR}/index.html" <<'EOF'
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Partner Node Local Dashboard</title>
+  <style>
+    :root { --bg:#f5f7fa; --card:#fff; --line:#d8dee7; --text:#1f2937; --accent:#0b6d6d; }
+    body { margin:0; font-family:Segoe UI, sans-serif; background:var(--bg); color:var(--text); }
+    .wrap { max-width: 1000px; margin: 0 auto; padding: 16px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; margin-bottom:12px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
+    input, select, button, textarea { border:1px solid var(--line); border-radius:8px; padding:8px; font:inherit; }
+    button { border:0; color:#fff; background:var(--accent); cursor:pointer; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { text-align:left; padding:6px; border-bottom:1px solid #edf2f7; font-size:13px; }
+    .muted { color:#64748b; }
+    .error { color:#b42318; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h2>Partner Node Local Dashboard</h2>
+    <div id="error" class="error"></div>
+
+    <div class="card">
+      <div class="row">
+        <button onclick="refresh()">Refresh</button>
+      </div>
+      <div id="meta" class="muted">No data</div>
+    </div>
+
+    <div class="card">
+      <h3>Command</h3>
+      <div class="row">
+        <select id="cmdType">
+          <option>self_check</option>
+          <option>rotate_ip</option>
+          <option>restart_proxy</option>
+          <option>reconcile_config</option>
+          <option>transport_self_check</option>
+        </select>
+        <input id="timeout" type="number" min="1" value="30" />
+        <button onclick="sendCommand()">Send</button>
+      </div>
+      <textarea id="params" rows="3" style="width:100%">{"reason":"manual"}</textarea>
+    </div>
+
+    <div class="card">
+      <h3>Modems</h3>
+      <table>
+        <thead><tr><th>ID</th><th>State</th><th>WAN IP</th><th>Operator</th><th>Signal</th><th>Port</th></tr></thead>
+        <tbody id="modems"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    function setError(msg){ document.getElementById('error').textContent = msg || ''; }
+    function showMeta(d){
+      document.getElementById('meta').textContent =
+        `node=${d.node_id || '-'} status=${d.node_status || '-'} ip=${d.external_ip || '-'} ` +
+        `traffic_in=${d.bytes_in_total || 0} traffic_out=${d.bytes_out_total || 0} pending=${d.pending_commands || 0}`;
+    }
+    function showModems(items){
+      const body = document.getElementById('modems');
+      body.innerHTML = '';
+      (items || []).forEach(m => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${m.id || ''}</td><td>${m.state || ''}</td><td>${m.wan_ip || ''}</td><td>${m.operator || ''}</td><td>${m.signal_strength || 0}</td><td>${m.port || ''}</td>`;
+        body.appendChild(tr);
+      });
+    }
+    async function refresh(){
+      try {
+        setError('');
+        const r = await fetch('/api/overview');
+        if(!r.ok) throw new Error(await r.text());
+        const d = await r.json();
+        showMeta(d);
+        showModems(d.modems || []);
+      } catch(e) { setError(String(e.message || e)); }
+    }
+    async function sendCommand(){
+      try {
+        setError('');
+        let params = {};
+        const raw = document.getElementById('params').value.trim();
+        if(raw) params = JSON.parse(raw);
+        const payload = {
+          type: document.getElementById('cmdType').value,
+          timeout_sec: Number(document.getElementById('timeout').value || 30),
+          params
+        };
+        const r = await fetch('/api/command', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(payload)
+        });
+        if(!r.ok) throw new Error(await r.text());
+        await refresh();
+      } catch(e) { setError(String(e.message || e)); }
+    }
+    refresh();
+    setInterval(refresh, 7000);
+  </script>
+</body>
+</html>
+EOF
+
+  cat > "${UI_DIR}/server.py" <<'EOF'
+#!/usr/bin/env python3
+import json
+import os
+import urllib.error
+import urllib.parse
+import urllib.request
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+MAIN_SERVER = os.environ.get("MAIN_SERVER", "").rstrip("/")
+PARTNER_KEY = os.environ.get("PARTNER_KEY", "")
+LISTEN_ADDR = os.environ.get("UI_LISTEN_ADDR", "127.0.0.1")
+LISTEN_PORT = int(os.environ.get("UI_PORT", "19090"))
+INDEX_PATH = os.path.join(os.path.dirname(__file__), "index.html")
+
+ALLOWED = {"self_check", "rotate_ip", "restart_proxy", "reconcile_config", "transport_self_check"}
+
+def json_request(url, method="GET", payload=None):
+  body = None
+  headers = {"Content-Type": "application/json"}
+  if payload is not None:
+    body = json.dumps(payload).encode("utf-8")
+  req = urllib.request.Request(url, method=method, data=body, headers=headers)
+  with urllib.request.urlopen(req, timeout=20) as resp:
+    data = resp.read()
+    return json.loads(data.decode("utf-8"))
+
+class Handler(BaseHTTPRequestHandler):
+  def _send_json(self, code, payload):
+    body = json.dumps(payload).encode("utf-8")
+    self.send_response(code)
+    self.send_header("Content-Type", "application/json")
+    self.send_header("Content-Length", str(len(body)))
+    self.end_headers()
+    self.wfile.write(body)
+
+  def _send_text(self, code, text):
+    body = text.encode("utf-8")
+    self.send_response(code)
+    self.send_header("Content-Type", "text/plain; charset=utf-8")
+    self.send_header("Content-Length", str(len(body)))
+    self.end_headers()
+    self.wfile.write(body)
+
+  def do_GET(self):
+    if self.path in ("/", "/index.html"):
+      with open(INDEX_PATH, "rb") as f:
+        html = f.read()
+      self.send_response(200)
+      self.send_header("Content-Type", "text/html; charset=utf-8")
+      self.send_header("Content-Length", str(len(html)))
+      self.end_headers()
+      self.wfile.write(html)
+      return
+    if self.path == "/api/overview":
+      try:
+        qs = urllib.parse.urlencode({"partner_key": PARTNER_KEY})
+        data = json_request(f"{MAIN_SERVER}/api/partner/overview?{qs}")
+        self._send_json(200, data)
+      except urllib.error.HTTPError as e:
+        self._send_text(e.code, e.read().decode("utf-8", errors="ignore"))
+      except Exception as e:
+        self._send_text(502, str(e))
+      return
+    if self.path == "/healthz":
+      self._send_text(200, "ok")
+      return
+    self._send_text(404, "not found")
+
+  def do_POST(self):
+    if self.path != "/api/command":
+      self._send_text(404, "not found")
+      return
+    try:
+      length = int(self.headers.get("Content-Length", "0"))
+      raw = self.rfile.read(length) if length > 0 else b"{}"
+      req = json.loads(raw.decode("utf-8"))
+      cmd_type = str(req.get("type", "")).strip()
+      if cmd_type not in ALLOWED:
+        self._send_text(403, "command not allowed")
+        return
+      payload = {
+        "partner_key": PARTNER_KEY,
+        "type": cmd_type,
+        "timeout_sec": int(req.get("timeout_sec", 30)),
+        "params": req.get("params", {}),
+      }
+      data = json_request(f"{MAIN_SERVER}/api/partner/command", method="POST", payload=payload)
+      self._send_json(200, data)
+    except urllib.error.HTTPError as e:
+      self._send_text(e.code, e.read().decode("utf-8", errors="ignore"))
+    except Exception as e:
+      self._send_text(400, str(e))
+
+  def log_message(self, fmt, *args):
+    return
+
+if __name__ == "__main__":
+  server = HTTPServer((LISTEN_ADDR, LISTEN_PORT), Handler)
+  server.serve_forever()
+EOF
+
+  chmod 0755 "${UI_DIR}/server.py"
+  chmod 0644 "${UI_DIR}/index.html"
+}
+
+write_partner_ui_env() {
+  local path
+  path="${UI_DIR}/ui.env"
+  cat > "${path}" <<EOF
+MAIN_SERVER="${MAIN_SERVER}"
+PARTNER_KEY="${PARTNER_KEY}"
+UI_LISTEN_ADDR="127.0.0.1"
+UI_PORT="${UI_PORT}"
+EOF
+  chmod 0600 "${path}"
+}
+
+write_partner_ui_systemd_unit() {
+  local service_path
+  service_path="/etc/systemd/system/${UI_SERVICE_NAME}.service"
+  cat > "${service_path}" <<EOF
+[Unit]
+Description=Partner Node Local UI
+After=network-online.target ${SERVICE_NAME}.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=${UI_DIR}/ui.env
+ExecStart=/usr/bin/python3 ${UI_DIR}/server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+start_partner_ui_service() {
+  systemctl daemon-reload
+  systemctl enable "${UI_SERVICE_NAME}"
+  if [[ "${SKIP_START}" == "true" ]]; then
+    log_warn "Skipping ${UI_SERVICE_NAME} start (--skip-start)."
+    return
+  fi
+  systemctl restart "${UI_SERVICE_NAME}"
+  sleep 1
+  if systemctl is-active --quiet "${UI_SERVICE_NAME}"; then
+    log_info "Service ${UI_SERVICE_NAME} is active."
+  else
+    log_warn "Service ${UI_SERVICE_NAME} is not active yet. Check: journalctl -u ${UI_SERVICE_NAME} -n 100 --no-pager"
+  fi
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -612,6 +887,7 @@ parse_args() {
       --hilink-timeout) HILINK_TIMEOUT="${2:-}"; shift 2 ;;
       --doctor-binary-url) DOCTOR_BINARY_URL="${2:-}"; shift 2 ;;
       --threeproxy-package-url) THREEPROXY_PACKAGE_URL="${2:-}"; shift 2 ;;
+      --ui-port) UI_PORT="${2:-}"; shift 2 ;;
       --install-prefix) INSTALL_PREFIX="${2:-}"; shift 2 ;;
       --skip-start) SKIP_START="true"; shift ;;
       --skip-firewall) SKIP_FIREWALL="true"; shift ;;
@@ -644,6 +920,10 @@ main() {
     log_err "--modem-rotation-method must be auto, mmcli, api or api_reboot."
     exit 1
   fi
+  if ! [[ "${UI_PORT}" =~ ^[0-9]+$ ]] || [[ "${UI_PORT}" -lt 1 || "${UI_PORT}" -gt 65535 ]]; then
+    log_err "--ui-port must be a valid TCP port (1..65535)."
+    exit 1
+  fi
 
   log_info "Starting partner-node zero-touch installation"
   local pkg_mgr
@@ -674,13 +954,22 @@ main() {
   configure_firewall || true
   write_systemd_unit
   start_service
+  write_partner_ui_files
+  write_partner_ui_env
+  write_partner_ui_systemd_unit
+  start_partner_ui_service
 
   log_info "Installation finished."
   echo
   echo "Useful commands:"
   echo "  systemctl status ${SERVICE_NAME}"
+  echo "  systemctl status ${UI_SERVICE_NAME}"
   echo "  journalctl -u ${SERVICE_NAME} -f"
+  echo "  journalctl -u ${UI_SERVICE_NAME} -f"
   echo "  ${INSTALL_PREFIX}/doctor version || true"
+  echo
+  echo "Local dashboard URL:"
+  echo "  http://127.0.0.1:${UI_PORT}"
 }
 
 main "$@"
