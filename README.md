@@ -11,7 +11,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/partner-node-installer/main/s
 ```
 
 Default binary URL already points to:
-`http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.14`
+`http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.15`
 
 If you host another build, override with `--binary-url`.
 
