@@ -694,7 +694,7 @@ write_partner_ui_files() {
       const body = document.getElementById('modems');
       body.innerHTML = '';
       (items || []).forEach(m => {
-        const ip = m.wan_ip || m.ip || externalIP || '';
+        const ip = m.wan_ip || m.ip || '';
         const tr = document.createElement('tr');
         tr.innerHTML = `<td>${m.ordinal || '-'}</td><td>${m.id || ''}</td><td>${m.state || ''}</td><td>${ip}</td><td>${m.operator || ''}</td><td>${m.signal_strength || 0}</td><td>${m.port || ''}</td>`;
         body.appendChild(tr);
