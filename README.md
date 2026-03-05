@@ -11,7 +11,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/partner-node-installer/main/s
 ```
 
 Default binary URL already points to:
-`http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.11`
+`http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.13`
 
 If you host another build, override with `--binary-url`.
 
@@ -29,6 +29,8 @@ If you host another build, override with `--binary-url`.
 8. Enables and starts `partner-node`.
 9. Installs local partner dashboard service `partner-node-ui` (local-only web UI).
    UI binds to `127.0.0.1` by default, so other partners cannot enumerate dashboards remotely.
+10. Saves install params to `/etc/partner-node/install.env` and installs self-update helper script.
+    Timer is disabled by default and can be enabled explicitly.
 
 ## Important Flags
 
@@ -40,6 +42,9 @@ If you host another build, override with `--binary-url`.
   Default: `https://chatmod-test.warforgalaxy.com/downloads/partner-node/3proxy.deb`
 - `--skip-firewall` (optional; disable installer firewall hardening)
 - `--ui-port` (optional; local UI port, default `19090`)
+- `--auto-update-enabled` (`true`/`false`, default `false`)
+- `--auto-update-interval` (default `6h`)
+- `--installer-url` (raw `install.sh` URL used by self-update timer)
 - `--modem-rotation-method` (`auto`, `mmcli`, `api`, `api_reboot`; default `auto`)
 - `--hilink-enabled` (default `true`)
 - `--hilink-base-url` (optional; auto-detected if empty)
@@ -50,8 +55,10 @@ If you host another build, override with `--binary-url`.
 ```bash
 systemctl status partner-node
 systemctl status partner-node-ui
+systemctl status partner-node-self-update.timer
 journalctl -u partner-node -f
 journalctl -u partner-node-ui -f
+journalctl -u partner-node-self-update -n 100 --no-pager
 ```
 
 Local dashboard URL (on partner machine):

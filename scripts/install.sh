@@ -11,7 +11,8 @@ set -euo pipefail
 PARTNER_KEY=""
 COUNTRY=""
 MAIN_SERVER=""
-BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.11"
+BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.13"
+BINARY_URL_EXPLICIT="false"
 DOCTOR_BINARY_URL=""
 MODEM_ROTATION_METHOD="auto" # auto|mmcli|api
 HILINK_ENABLED="true"
@@ -28,6 +29,11 @@ SERVICE_NAME="partner-node"
 UI_SERVICE_NAME="partner-node-ui"
 UI_DIR="/opt/partner-node-ui"
 UI_PORT="19090"
+AUTO_UPDATE_SERVICE_NAME="partner-node-self-update"
+AUTO_UPDATE_TIMER_NAME="partner-node-self-update.timer"
+AUTO_UPDATE_ENABLED="false"
+AUTO_UPDATE_INTERVAL="6h"
+INSTALLER_URL="https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/install.sh"
 RUN_USER="partner-node"
 SKIP_START="false"
 SKIP_FIREWALL="false"
@@ -60,6 +66,9 @@ Optional:
   --threeproxy-package-url <url>  Custom 3proxy package URL (.rpm/.deb)
   --skip-firewall                 Do not apply host firewall hardening
   --ui-port <port>                Local partner UI port (default: 19090)
+  --auto-update-enabled <bool>    true|false (default: false)
+  --auto-update-interval <dur>    systemd duration, default: 6h
+  --installer-url <url>           URL used by self-update timer
   --install-prefix <dir>          Default: /usr/local/bin
   --skip-start                    Install only, do not start service
   --help
@@ -156,7 +165,7 @@ install_from_binary() {
     exit 1
   fi
 
-  if [[ "${arch}" != "amd64" && "${url}" == "http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.11" ]]; then
+  if [[ "${arch}" != "amd64" && "${url}" == "http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.13" ]]; then
     log_err "Default binary is amd64-only. Provide --binary-url for ${arch}."
     exit 1
   fi
@@ -560,6 +569,7 @@ security:
     - "force_fallback"
     - "force_primary"
     - "transport_self_check"
+    - "self_update"
 EOF
   chmod 0600 "${config_path}"
 }
@@ -898,13 +908,159 @@ start_partner_ui_service() {
   fi
 }
 
+write_install_env() {
+  local path binary_url_override
+  path="${CONFIG_DIR}/install.env"
+  binary_url_override=""
+  if [[ "${BINARY_URL_EXPLICIT}" == "true" ]]; then
+    binary_url_override="${BINARY_URL}"
+  fi
+  cat > "${path}" <<EOF
+PARTNER_KEY="${PARTNER_KEY}"
+COUNTRY="${COUNTRY}"
+MAIN_SERVER="${MAIN_SERVER}"
+BINARY_URL_OVERRIDE="${binary_url_override}"
+DOCTOR_BINARY_URL="${DOCTOR_BINARY_URL}"
+MODEM_ROTATION_METHOD="${MODEM_ROTATION_METHOD}"
+HILINK_ENABLED="${HILINK_ENABLED}"
+HILINK_BASE_URL="${HILINK_BASE_URL}"
+HILINK_TIMEOUT="${HILINK_TIMEOUT}"
+THREEPROXY_PACKAGE_URL="${THREEPROXY_PACKAGE_URL}"
+INSTALL_PREFIX="${INSTALL_PREFIX}"
+SKIP_FIREWALL="${SKIP_FIREWALL}"
+UI_PORT="${UI_PORT}"
+AUTO_UPDATE_ENABLED="${AUTO_UPDATE_ENABLED}"
+AUTO_UPDATE_INTERVAL="${AUTO_UPDATE_INTERVAL}"
+INSTALLER_URL="${INSTALLER_URL}"
+EOF
+  chmod 0600 "${path}"
+  chown root:root "${path}" || true
+}
+
+write_self_update_script() {
+  local path
+  path="/usr/local/sbin/partner-node-self-update.sh"
+  cat > "${path}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+ENV_FILE="/etc/partner-node/install.env"
+if [[ ! -f "${ENV_FILE}" ]]; then
+  echo "[partner-node-self-update] install.env not found, skipping."
+  exit 0
+fi
+
+# shellcheck disable=SC1090
+source "${ENV_FILE}"
+
+if [[ "${AUTO_UPDATE_ENABLED:-true}" != "true" ]]; then
+  echo "[partner-node-self-update] auto-update disabled."
+  exit 0
+fi
+
+if [[ -z "${PARTNER_KEY:-}" || -z "${MAIN_SERVER:-}" ]]; then
+  echo "[partner-node-self-update] missing PARTNER_KEY or MAIN_SERVER."
+  exit 1
+fi
+
+TMP="$(mktemp)"
+TMP_BIN="$(mktemp)"
+trap 'rm -f "${TMP}" "${TMP_BIN}"' EXIT
+curl -fsSL "${INSTALLER_URL}" -o "${TMP}"
+
+TARGET_BINARY_URL="${BINARY_URL_OVERRIDE:-}"
+if [[ -z "${TARGET_BINARY_URL}" ]]; then
+  TARGET_BINARY_URL="$(sed -n 's/^BINARY_URL=\"\\(.*\\)\"$/\\1/p' "${TMP}" | head -n 1)"
+fi
+
+if [[ -n "${TARGET_BINARY_URL}" && -f "/usr/local/bin/node-agent" ]]; then
+  if curl -fsSL "${TARGET_BINARY_URL}" -o "${TMP_BIN}"; then
+    LOCAL_HASH="$(sha256sum /usr/local/bin/node-agent | awk '{print $1}')"
+    REMOTE_HASH="$(sha256sum "${TMP_BIN}" | awk '{print $1}')"
+    if [[ -n "${LOCAL_HASH}" && "${LOCAL_HASH}" == "${REMOTE_HASH}" ]]; then
+      echo "[partner-node-self-update] node-agent already up to date (${LOCAL_HASH})."
+      exit 0
+    fi
+  fi
+fi
+
+ARGS=(
+  --partner-key "${PARTNER_KEY}"
+  --main-server "${MAIN_SERVER}"
+  --modem-rotation-method "${MODEM_ROTATION_METHOD:-auto}"
+  --hilink-enabled "${HILINK_ENABLED:-true}"
+  --hilink-timeout "${HILINK_TIMEOUT:-15s}"
+  --install-prefix "${INSTALL_PREFIX:-/usr/local/bin}"
+  --ui-port "${UI_PORT:-19090}"
+  --auto-update-enabled "${AUTO_UPDATE_ENABLED:-true}"
+  --auto-update-interval "${AUTO_UPDATE_INTERVAL:-6h}"
+  --installer-url "${INSTALLER_URL}"
+)
+
+if [[ -n "${COUNTRY:-}" ]]; then ARGS+=(--country "${COUNTRY}"); fi
+if [[ -n "${BINARY_URL_OVERRIDE:-}" ]]; then ARGS+=(--binary-url "${BINARY_URL_OVERRIDE}"); fi
+if [[ -n "${DOCTOR_BINARY_URL:-}" ]]; then ARGS+=(--doctor-binary-url "${DOCTOR_BINARY_URL}"); fi
+if [[ -n "${HILINK_BASE_URL:-}" ]]; then ARGS+=(--hilink-base-url "${HILINK_BASE_URL}"); fi
+if [[ -n "${THREEPROXY_PACKAGE_URL:-}" ]]; then ARGS+=(--threeproxy-package-url "${THREEPROXY_PACKAGE_URL}"); fi
+if [[ "${SKIP_FIREWALL:-false}" == "true" ]]; then ARGS+=(--skip-firewall); fi
+if [[ "${SELF_UPDATE_SKIP_START:-false}" == "true" ]]; then ARGS+=(--skip-start); fi
+
+bash "${TMP}" "${ARGS[@]}"
+EOF
+  chmod 0755 "${path}"
+  chown root:root "${path}" || true
+}
+
+write_self_update_systemd_units() {
+  cat > "/etc/systemd/system/${AUTO_UPDATE_SERVICE_NAME}.service" <<EOF
+[Unit]
+Description=Partner Node Self-Update
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/partner-node-self-update.sh
+EOF
+
+  cat > "/etc/systemd/system/${AUTO_UPDATE_TIMER_NAME}" <<EOF
+[Unit]
+Description=Run Partner Node Self-Update periodically
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=${AUTO_UPDATE_INTERVAL}
+Persistent=true
+Unit=${AUTO_UPDATE_SERVICE_NAME}.service
+
+[Install]
+WantedBy=timers.target
+EOF
+}
+
+start_self_update_timer() {
+  systemctl daemon-reload
+  if [[ "${AUTO_UPDATE_ENABLED}" != "true" ]]; then
+    systemctl disable --now "${AUTO_UPDATE_TIMER_NAME}" >/dev/null 2>&1 || true
+    log_warn "Self-update timer is disabled."
+    return 0
+  fi
+  systemctl enable "${AUTO_UPDATE_TIMER_NAME}"
+  if [[ "${SKIP_START}" == "true" ]]; then
+    log_warn "Skipping ${AUTO_UPDATE_TIMER_NAME} start (--skip-start)."
+    return 0
+  fi
+  systemctl restart "${AUTO_UPDATE_TIMER_NAME}"
+  log_info "Self-update timer is active (${AUTO_UPDATE_INTERVAL})."
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --partner-key) PARTNER_KEY="${2:-}"; shift 2 ;;
       --country) COUNTRY="${2:-}"; shift 2 ;;
       --main-server) MAIN_SERVER="${2:-}"; shift 2 ;;
-      --binary-url) BINARY_URL="${2:-}"; shift 2 ;;
+      --binary-url) BINARY_URL="${2:-}"; BINARY_URL_EXPLICIT="true"; shift 2 ;;
       --modem-rotation-method) MODEM_ROTATION_METHOD="${2:-}"; shift 2 ;;
       --hilink-enabled) HILINK_ENABLED="${2:-}"; shift 2 ;;
       --hilink-base-url) HILINK_BASE_URL="${2:-}"; shift 2 ;;
@@ -912,6 +1068,9 @@ parse_args() {
       --doctor-binary-url) DOCTOR_BINARY_URL="${2:-}"; shift 2 ;;
       --threeproxy-package-url) THREEPROXY_PACKAGE_URL="${2:-}"; shift 2 ;;
       --ui-port) UI_PORT="${2:-}"; shift 2 ;;
+      --auto-update-enabled) AUTO_UPDATE_ENABLED="${2:-}"; shift 2 ;;
+      --auto-update-interval) AUTO_UPDATE_INTERVAL="${2:-}"; shift 2 ;;
+      --installer-url) INSTALLER_URL="${2:-}"; shift 2 ;;
       --install-prefix) INSTALL_PREFIX="${2:-}"; shift 2 ;;
       --skip-start) SKIP_START="true"; shift ;;
       --skip-firewall) SKIP_FIREWALL="true"; shift ;;
@@ -948,6 +1107,18 @@ main() {
     log_err "--ui-port must be a valid TCP port (1..65535)."
     exit 1
   fi
+  if [[ "${AUTO_UPDATE_ENABLED}" != "true" && "${AUTO_UPDATE_ENABLED}" != "false" ]]; then
+    log_err "--auto-update-enabled must be true or false."
+    exit 1
+  fi
+  if [[ -z "${AUTO_UPDATE_INTERVAL}" ]]; then
+    log_err "--auto-update-interval cannot be empty."
+    exit 1
+  fi
+  if [[ -z "${INSTALLER_URL}" ]]; then
+    log_err "--installer-url cannot be empty."
+    exit 1
+  fi
 
   log_info "Starting partner-node zero-touch installation"
   local pkg_mgr
@@ -982,14 +1153,20 @@ main() {
   write_partner_ui_env
   write_partner_ui_systemd_unit
   start_partner_ui_service
+  write_install_env
+  write_self_update_script
+  write_self_update_systemd_units
+  start_self_update_timer
 
   log_info "Installation finished."
   echo
   echo "Useful commands:"
   echo "  systemctl status ${SERVICE_NAME}"
   echo "  systemctl status ${UI_SERVICE_NAME}"
+  echo "  systemctl status ${AUTO_UPDATE_TIMER_NAME}"
   echo "  journalctl -u ${SERVICE_NAME} -f"
   echo "  journalctl -u ${UI_SERVICE_NAME} -f"
+  echo "  journalctl -u ${AUTO_UPDATE_SERVICE_NAME} -n 100 --no-pager"
   echo "  ${INSTALL_PREFIX}/doctor version || true"
   echo
   echo "Local dashboard URL:"
