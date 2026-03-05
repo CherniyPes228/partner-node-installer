@@ -653,6 +653,7 @@ write_partner_ui_files() {
         <button onclick="sendCommand()">Send</button>
       </div>
       <textarea id="params" rows="3" style="width:100%">{"reason":"manual"}</textarea>
+      <div id="cmdResult" class="muted" style="margin-top:8px"></div>
     </div>
 
     <div class="card">
@@ -665,20 +666,35 @@ write_partner_ui_files() {
   </div>
 
   <script>
+    function formatBytes(value){
+      const bytes = Number(value || 0);
+      if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+      const units = ['B','KB','MB','GB','TB'];
+      const exp = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+      const num = bytes / Math.pow(1024, exp);
+      return `${num.toFixed(exp === 0 ? 0 : 2)} ${units[exp]}`;
+    }
     function setError(msg){ document.getElementById('error').textContent = msg || ''; }
     function showMeta(d){
       document.getElementById('meta').textContent =
         `node=${d.node_id || '-'} status=${d.node_status || '-'} ip=${d.external_ip || '-'} ` +
-        `traffic_in=${d.bytes_in_total || 0} traffic_out=${d.bytes_out_total || 0} pending=${d.pending_commands || 0}`;
+        `traffic_in=${formatBytes(d.bytes_in_total)} traffic_out=${formatBytes(d.bytes_out_total)} pending=${d.pending_commands || 0}`;
     }
-    function showModems(items){
+    function showModems(items, externalIP){
       const body = document.getElementById('modems');
       body.innerHTML = '';
       (items || []).forEach(m => {
+        const ip = m.wan_ip || m.ip || externalIP || '';
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${m.id || ''}</td><td>${m.state || ''}</td><td>${m.wan_ip || ''}</td><td>${m.operator || ''}</td><td>${m.signal_strength || 0}</td><td>${m.port || ''}</td>`;
+        tr.innerHTML = `<td>${m.id || ''}</td><td>${m.state || ''}</td><td>${ip}</td><td>${m.operator || ''}</td><td>${m.signal_strength || 0}</td><td>${m.port || ''}</td>`;
         body.appendChild(tr);
       });
+    }
+    function showCommandResult(text, ok){
+      const el = document.getElementById('cmdResult');
+      el.textContent = text || '';
+      el.style.color = ok ? '#166534' : '#b42318';
+      el.style.fontWeight = '600';
     }
     async function refresh(){
       try {
@@ -687,7 +703,12 @@ write_partner_ui_files() {
         if(!r.ok) throw new Error(await r.text());
         const d = await r.json();
         showMeta(d);
-        showModems(d.modems || []);
+        showModems(d.modems || [], d.external_ip || '');
+        const last = (d.last_results || [])[0];
+        if (last) {
+          const msg = `[${last.status || 'unknown'}] ${last.message || ''} (id=${last.command_id || '-'})`;
+          showCommandResult(msg, last.status === 'success');
+        }
       } catch(e) { setError(String(e.message || e)); }
     }
     async function sendCommand(){
@@ -707,6 +728,9 @@ write_partner_ui_files() {
           body: JSON.stringify(payload)
         });
         if(!r.ok) throw new Error(await r.text());
+        const res = await r.json();
+        const cmdId = res?.command?.id || '-';
+        showCommandResult(`[pending] command queued (id=${cmdId})`, true);
         await refresh();
       } catch(e) { setError(String(e.message || e)); }
     }
