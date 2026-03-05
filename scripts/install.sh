@@ -11,7 +11,7 @@ set -euo pipefail
 PARTNER_KEY=""
 COUNTRY=""
 MAIN_SERVER=""
-BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.17"
+BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.18"
 BINARY_URL_EXPLICIT="false"
 DOCTOR_BINARY_URL=""
 MODEM_ROTATION_METHOD="auto" # auto|mmcli|api
@@ -165,7 +165,7 @@ install_from_binary() {
     exit 1
   fi
 
-  if [[ "${arch}" != "amd64" && "${url}" == "http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.17" ]]; then
+  if [[ "${arch}" != "amd64" && "${url}" == "http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.18" ]]; then
     log_err "Default binary is amd64-only. Provide --binary-url for ${arch}."
     exit 1
   fi
@@ -953,7 +953,7 @@ fi
 # shellcheck disable=SC1090
 source "${ENV_FILE}"
 
-if [[ "${AUTO_UPDATE_ENABLED:-true}" != "true" ]]; then
+if [[ "${AUTO_UPDATE_ENABLED:-true}" != "true" && "${SELF_UPDATE_FORCE:-false}" != "true" ]]; then
   echo "[partner-node-self-update] auto-update disabled."
   exit 0
 fi
@@ -1174,5 +1174,6 @@ main() {
 }
 
 main "$@"
+
 
 
