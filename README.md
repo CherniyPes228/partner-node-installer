@@ -1,4 +1,4 @@
-# Zero-Touch Installer (Partner Node)
+﻿# Zero-Touch Installer (Partner Node)
 
 This folder contains a Linux installer designed for one-line partner onboarding.
 
@@ -11,7 +11,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/partner-node-installer/main/s
 ```
 
 Default binary URL already points to:
-`http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.15`
+`http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.16`
 
 If you host another build, override with `--binary-url`.
 
@@ -69,3 +69,4 @@ Local dashboard URL (on partner machine):
 - The script is intended for Linux partner nodes.
 - Provide real download URLs before production use.
 - Keep installer and binaries behind HTTPS with integrity verification in production.
+
