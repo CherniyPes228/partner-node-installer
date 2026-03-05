@@ -669,7 +669,7 @@ write_partner_ui_files() {
     <div class="card">
       <h3>Modems</h3>
       <table>
-        <thead><tr><th>ID</th><th>State</th><th>WAN IP</th><th>Operator</th><th>Signal</th><th>Port</th></tr></thead>
+        <thead><tr><th>#</th><th>ID</th><th>State</th><th>WAN IP</th><th>Operator</th><th>Signal</th><th>Port</th></tr></thead>
         <tbody id="modems"></tbody>
       </table>
     </div>
@@ -696,7 +696,7 @@ write_partner_ui_files() {
       (items || []).forEach(m => {
         const ip = m.wan_ip || m.ip || externalIP || '';
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${m.id || ''}</td><td>${m.state || ''}</td><td>${ip}</td><td>${m.operator || ''}</td><td>${m.signal_strength || 0}</td><td>${m.port || ''}</td>`;
+        tr.innerHTML = `<td>${m.ordinal || '-'}</td><td>${m.id || ''}</td><td>${m.state || ''}</td><td>${ip}</td><td>${m.operator || ''}</td><td>${m.signal_strength || 0}</td><td>${m.port || ''}</td>`;
         body.appendChild(tr);
       });
     }
