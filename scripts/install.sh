@@ -11,13 +11,15 @@ set -euo pipefail
 PARTNER_KEY=""
 COUNTRY=""
 MAIN_SERVER=""
-BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.21"
+BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.22"
 BINARY_URL_EXPLICIT="false"
 DOCTOR_BINARY_URL=""
 MODEM_ROTATION_METHOD="auto" # auto|mmcli|api
 HILINK_ENABLED="true"
 HILINK_BASE_URL=""
 HILINK_TIMEOUT="15s"
+MODEM_FLASH_ENABLED="true"
+FLASH_ASSETS_BASE_URL="https://chatmod-test.warforgalaxy.com/downloads/partner-node/flash"
 THREEPROXY_VERSION="0.9.5"
 THREEPROXY_PACKAGE_URL="https://chatmod-test.warforgalaxy.com/downloads/partner-node/3proxy.deb"
 INSTALL_PREFIX="/usr/local/bin"
@@ -62,6 +64,8 @@ Optional:
   --hilink-enabled <true|false>   Default: true
   --hilink-base-url <url>         Example: http://192.168.13.1
   --hilink-timeout <duration>     Default: 15s
+  --modem-flash-enabled <bool>    true|false (default: true)
+  --flash-assets-base-url <url>   Base URL for balong tools/images
   --doctor-binary-url <url>       Direct URL to doctor binary
   --threeproxy-package-url <url>  Custom 3proxy package URL (.rpm/.deb)
   --skip-firewall                 Do not apply host firewall hardening
@@ -165,7 +169,7 @@ install_from_binary() {
     exit 1
   fi
 
-  if [[ "${arch}" != "amd64" && "${url}" == "http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.21" ]]; then
+  if [[ "${arch}" != "amd64" && "${url}" == "http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.22" ]]; then
     log_err "Default binary is amd64-only. Provide --binary-url for ${arch}."
     exit 1
   fi
@@ -523,6 +527,9 @@ modem:
   mmcli_path: "/usr/bin/mmcli"
   discovery_interval: 30s
   health_check_interval: 60s
+  flash:
+    enabled: ${MODEM_FLASH_ENABLED}
+    script_path: "/usr/local/sbin/partner-node-flash-e3372h.sh"
   rotation:
     default_method: "${MODEM_ROTATION_METHOD}"
   hilink:
@@ -669,7 +676,7 @@ write_partner_ui_files() {
     <div class="card">
       <h3>Modems</h3>
       <table>
-        <thead><tr><th>#</th><th>ID</th><th>State</th><th>WAN IP</th><th>Operator</th><th>Signal</th><th>Port</th></tr></thead>
+        <thead><tr><th>#</th><th>ID</th><th>State</th><th>Flash</th><th>Stage</th><th>WAN IP</th><th>Operator</th><th>Signal</th><th>Port</th></tr></thead>
         <tbody id="modems"></tbody>
       </table>
     </div>
@@ -696,7 +703,7 @@ write_partner_ui_files() {
       (items || []).forEach(m => {
         const ip = m.wan_ip || m.ip || '';
         const tr = document.createElement('tr');
-        tr.innerHTML = `<td>${m.ordinal || '-'}</td><td>${m.id || ''}</td><td>${m.state || ''}</td><td>${ip}</td><td>${m.operator || ''}</td><td>${m.signal_strength || 0}</td><td>${m.port || ''}</td>`;
+        tr.innerHTML = `<td>${m.ordinal || '-'}</td><td>${m.id || ''}</td><td>${m.state || ''}</td><td>${m.flash_status || '-'}</td><td title="${m.flash_message || ''}">${m.flash_stage || '-'}</td><td>${ip}</td><td>${m.operator || ''}</td><td>${m.signal_strength || 0}</td><td>${m.port || ''}</td>`;
         body.appendChild(tr);
       });
     }
@@ -892,6 +899,116 @@ WantedBy=multi-user.target
 EOF
 }
 
+write_flash_script() {
+  local flash_script
+  flash_script="/usr/local/sbin/partner-node-flash-e3372h.sh"
+  cat > "${flash_script}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+MODEM_ID=""
+ORDINAL=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --modem-id) MODEM_ID="${2:-}"; shift 2 ;;
+    --ordinal) ORDINAL="${2:-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+
+FLASH_ROOT="${FLASH_ROOT:-/opt/partner-node-flash}"
+TOOLS_DIR="${TOOLS_DIR:-${FLASH_ROOT}/tools}"
+IMAGES_DIR="${IMAGES_DIR:-${FLASH_ROOT}/images}"
+PORT="${FLASH_PORT:-/dev/ttyUSB0}"
+
+BALONG_USBLOAD="${BALONG_USBLOAD:-${TOOLS_DIR}/balong-usbload}"
+BALONG_FLASH="${BALONG_FLASH:-${TOOLS_DIR}/balong_flash}"
+USBLOADER="${USBLOADER:-${TOOLS_DIR}/usbloader-3372h.bin}"
+USBLSAFE="${USBLSAFE:-${TOOLS_DIR}/usblsafe-3372h.bin}"
+INTERMEDIATE_IMAGE="${INTERMEDIATE_IMAGE:-${IMAGES_DIR}/E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin}"
+MAIN_IMAGE="${MAIN_IMAGE:-${IMAGES_DIR}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin}"
+WEBUI_IMAGE="${WEBUI_IMAGE:-${IMAGES_DIR}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin}"
+
+echo "STAGE:precheck"
+for f in "$BALONG_USBLOAD" "$BALONG_FLASH" "$USBLOADER" "$USBLSAFE" "$INTERMEDIATE_IMAGE" "$MAIN_IMAGE" "$WEBUI_IMAGE"; do
+  if [[ ! -f "$f" ]]; then
+    echo "ERROR:missing file $f"
+    exit 2
+  fi
+done
+if [[ ! -e "$PORT" ]]; then
+  echo "ERROR:flash port not found: $PORT"
+  exit 3
+fi
+
+echo "STAGE:usbload"
+"$BALONG_USBLOAD" -p "$PORT" "$USBLOADER"
+echo "STAGE:safe_loader"
+"$BALONG_FLASH" -p "$PORT" "$USBLSAFE"
+echo "STAGE:flash_intermediate"
+"$BALONG_FLASH" -p "$PORT" "$INTERMEDIATE_IMAGE"
+echo "STAGE:flash_main"
+"$BALONG_FLASH" -p "$PORT" "$MAIN_IMAGE"
+echo "STAGE:flash_webui"
+"$BALONG_FLASH" -p "$PORT" "$WEBUI_IMAGE"
+echo "STAGE:verify"
+echo "modem_id=${MODEM_ID} ordinal=${ORDINAL} port=${PORT}"
+echo "STAGE:completed"
+EOF
+  chmod 0755 "${flash_script}"
+}
+
+install_flash_assets() {
+  local root tools images base
+  root="/opt/partner-node-flash"
+  tools="${root}/tools"
+  images="${root}/images"
+  base="${FLASH_ASSETS_BASE_URL%/}"
+
+  if [[ "${MODEM_FLASH_ENABLED}" != "true" ]]; then
+    log_warn "Modem flash is disabled (--modem-flash-enabled=false)."
+    return 0
+  fi
+  if [[ -z "${base}" ]]; then
+    log_warn "FLASH_ASSETS_BASE_URL is empty; disabling modem flash."
+    MODEM_FLASH_ENABLED="false"
+    return 0
+  fi
+
+  mkdir -p "${tools}" "${images}"
+
+  local failures=0
+  download_asset() {
+    local url="$1"
+    local out="$2"
+    if ! curl -fsSL "${url}" -o "${out}"; then
+      log_warn "Failed to download ${url}"
+      failures=$((failures + 1))
+    fi
+  }
+
+  log_info "Downloading modem flash assets from ${base}"
+  download_asset "${base}/balong-usbload" "${tools}/balong-usbload"
+  download_asset "${base}/balong_flash" "${tools}/balong_flash"
+  download_asset "${base}/usbloader-3372h.bin" "${tools}/usbloader-3372h.bin"
+  download_asset "${base}/usblsafe-3372h.bin" "${tools}/usblsafe-3372h.bin"
+
+  download_asset "${base}/E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin" "${images}/E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin"
+  download_asset "${base}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin" "${images}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin"
+  download_asset "${base}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin" "${images}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin"
+
+  if [[ "${failures}" -gt 0 ]]; then
+    log_warn "Modem flash assets are incomplete (${failures} failed downloads); disabling modem flash."
+    MODEM_FLASH_ENABLED="false"
+    return 0
+  fi
+
+  chmod 0755 "${tools}/balong-usbload" "${tools}/balong_flash" || true
+  chmod 0644 "${tools}/usbloader-3372h.bin" "${tools}/usblsafe-3372h.bin" || true
+  chmod 0644 "${images}/"*.bin || true
+  log_info "Modem flash assets installed into ${root}"
+}
+
 start_partner_ui_service() {
   systemctl daemon-reload
   systemctl enable "${UI_SERVICE_NAME}"
@@ -925,6 +1042,8 @@ MODEM_ROTATION_METHOD="${MODEM_ROTATION_METHOD}"
 HILINK_ENABLED="${HILINK_ENABLED}"
 HILINK_BASE_URL="${HILINK_BASE_URL}"
 HILINK_TIMEOUT="${HILINK_TIMEOUT}"
+MODEM_FLASH_ENABLED="${MODEM_FLASH_ENABLED}"
+FLASH_ASSETS_BASE_URL="${FLASH_ASSETS_BASE_URL}"
 THREEPROXY_PACKAGE_URL="${THREEPROXY_PACKAGE_URL}"
 INSTALL_PREFIX="${INSTALL_PREFIX}"
 SKIP_FIREWALL="${SKIP_FIREWALL}"
@@ -990,6 +1109,8 @@ ARGS=(
   --modem-rotation-method "${MODEM_ROTATION_METHOD:-auto}"
   --hilink-enabled "${HILINK_ENABLED:-true}"
   --hilink-timeout "${HILINK_TIMEOUT:-15s}"
+  --modem-flash-enabled "${MODEM_FLASH_ENABLED:-true}"
+  --flash-assets-base-url "${FLASH_ASSETS_BASE_URL:-}"
   --install-prefix "${INSTALL_PREFIX:-/usr/local/bin}"
   --ui-port "${UI_PORT:-19090}"
   --auto-update-enabled "${AUTO_UPDATE_ENABLED:-true}"
@@ -1065,6 +1186,8 @@ parse_args() {
       --hilink-enabled) HILINK_ENABLED="${2:-}"; shift 2 ;;
       --hilink-base-url) HILINK_BASE_URL="${2:-}"; shift 2 ;;
       --hilink-timeout) HILINK_TIMEOUT="${2:-}"; shift 2 ;;
+      --modem-flash-enabled) MODEM_FLASH_ENABLED="${2:-}"; shift 2 ;;
+      --flash-assets-base-url) FLASH_ASSETS_BASE_URL="${2:-}"; shift 2 ;;
       --doctor-binary-url) DOCTOR_BINARY_URL="${2:-}"; shift 2 ;;
       --threeproxy-package-url) THREEPROXY_PACKAGE_URL="${2:-}"; shift 2 ;;
       --ui-port) UI_PORT="${2:-}"; shift 2 ;;
@@ -1111,6 +1234,10 @@ main() {
     log_err "--auto-update-enabled must be true or false."
     exit 1
   fi
+  if [[ "${MODEM_FLASH_ENABLED}" != "true" && "${MODEM_FLASH_ENABLED}" != "false" ]]; then
+    log_err "--modem-flash-enabled must be true or false."
+    exit 1
+  fi
   if [[ -z "${AUTO_UPDATE_INTERVAL}" ]]; then
     log_err "--auto-update-interval cannot be empty."
     exit 1
@@ -1143,11 +1270,13 @@ main() {
     fi
   fi
 
+  install_flash_assets
   create_user_and_dirs
   write_config
   harden_secret_permissions
   configure_firewall || true
   write_systemd_unit
+  write_flash_script
   start_service
   write_partner_ui_files
   write_partner_ui_env
