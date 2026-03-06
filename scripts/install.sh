@@ -11,7 +11,7 @@ set -euo pipefail
 PARTNER_KEY=""
 COUNTRY=""
 MAIN_SERVER=""
-BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.22"
+BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.23"
 BINARY_URL_EXPLICIT="false"
 DOCTOR_BINARY_URL=""
 MODEM_ROTATION_METHOD="auto" # auto|mmcli|api
@@ -169,7 +169,7 @@ install_from_binary() {
     exit 1
   fi
 
-  if [[ "${arch}" != "amd64" && "${url}" == "http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.22" ]]; then
+  if [[ "${arch}" != "amd64" && "${url}" == "http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.23" ]]; then
     log_err "Default binary is amd64-only. Provide --binary-url for ${arch}."
     exit 1
   fi
@@ -1303,7 +1303,6 @@ main() {
 }
 
 main "$@"
-
 
 
 
