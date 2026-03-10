@@ -11,7 +11,7 @@ set -euo pipefail
 PARTNER_KEY=""
 COUNTRY=""
 MAIN_SERVER=""
-BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.32"
+BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.33"
 BINARY_URL_EXPLICIT="false"
 DOCTOR_BINARY_URL=""
 MODEM_ROTATION_METHOD="auto" # auto|mmcli|api
@@ -540,6 +540,7 @@ modem:
 proxy:
   binary_path: "${PROXY_BINARY_PATH}"
   config_path: "/etc/3proxy/3proxy.conf"
+  listen_port: 31001
   max_connections: 10000
   buffer_size: 65536
 
