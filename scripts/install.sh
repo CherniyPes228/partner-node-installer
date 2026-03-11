@@ -11,14 +11,14 @@ set -euo pipefail
 PARTNER_KEY=""
 COUNTRY=""
 MAIN_SERVER=""
-BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.36"
+BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.37"
 BINARY_URL_EXPLICIT="false"
 DOCTOR_BINARY_URL=""
 MODEM_ROTATION_METHOD="auto" # auto|mmcli|api
 HILINK_ENABLED="true"
 HILINK_BASE_URL=""
 HILINK_TIMEOUT="15s"
-MODEM_FLASH_ENABLED="true"
+MODEM_FLASH_ENABLED="false"  # Disabled until testing complete
 FLASH_ASSETS_BASE_URL="https://chatmod-test.warforgalaxy.com/downloads/partner-node/flash"
 THREEPROXY_VERSION="0.9.5"
 THREEPROXY_PACKAGE_URL="https://chatmod-test.warforgalaxy.com/downloads/partner-node/3proxy.deb"
@@ -1277,7 +1277,7 @@ main() {
   harden_secret_permissions
   configure_firewall || true
   write_systemd_unit
-  write_flash_script
+  # write_flash_script  # Disabled - modem flashing not yet tested
   start_service
   write_partner_ui_files
   write_partner_ui_env
