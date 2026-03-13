@@ -1177,40 +1177,57 @@ start_self_update_timer() {
 }
 
 configure_policy_routing() {
-  log_info "Configuring policy routing to route system traffic via WiFi/Ethernet"
+  log_info "Configuring policy routing to route system traffic via WiFi/Ethernet (not modem)"
 
-  # Get current default gateway and interface
-  local default_gateway default_interface
-  default_gateway=$(ip route | grep "^default " | awk '{print $3}' | head -1)
-  default_interface=$(ip route | grep "^default " | awk '{print $5}' | head -1)
+  # Find all modem interfaces (typically USB modems have enx* names and 192.168.13.x range)
+  local modem_interfaces
+  modem_interfaces=$(ip link | grep "enx" | awk '{print $2}' | sed 's/:$//')
 
-  if [[ -z "${default_gateway}" ]] || [[ -z "${default_interface}" ]]; then
-    log_warn "Could not detect default gateway/interface. Skipping policy routing setup."
+  # Find the primary WiFi/Ethernet interface (the one with lowest metric in default routes)
+  local primary_interface primary_gateway
+  primary_interface=$(ip route | grep "^default " | sort -k9 -n | head -1 | awk '{print $5}')
+  primary_gateway=$(ip route | grep "^default " | sort -k9 -n | head -1 | awk '{print $3}')
+
+  if [[ -z "${primary_interface}" ]] || [[ -z "${primary_gateway}" ]]; then
+    log_warn "Could not detect primary gateway/interface. Skipping policy routing setup."
     return 0
   fi
 
-  log_info "Default gateway: ${default_gateway} on interface: ${default_interface}"
+  log_info "Primary interface: ${primary_interface} via ${primary_gateway}"
 
-  # Create a separate routing table for system/default traffic (priority 10)
-  if ! grep -q "^10[[:space:]]" /etc/iproute2/rt_tables 2>/dev/null; then
-    echo "10  system" >> /etc/iproute2/rt_tables
+  # Remove all default routes via modem interfaces
+  if [[ -n "${modem_interfaces}" ]]; then
+    log_info "Found modem interfaces: ${modem_interfaces}"
+    for iface in ${modem_interfaces}; do
+      log_info "Removing default routes via modem interface ${iface}"
+      # Remove all default routes via this interface
+      ip route del default dev "${iface}" 2>/dev/null || true
+    done
   fi
 
-  # Add default route to the system table pointing to WiFi/Ethernet gateway
-  ip route add default via "${default_gateway}" table system dev "${default_interface}" 2>/dev/null || true
+  # Ensure primary WiFi/Ethernet interface has the default route with lowest metric
+  ip route del default 2>/dev/null || true
+  ip route add default via "${primary_gateway}" dev "${primary_interface}" metric 1 2>/dev/null || true
 
-  # Add rules to ensure system processes use WiFi/Ethernet
-  # Priority 10000: system UIDs (0-999) use 'system' table (WiFi)
-  ip rule add from all uid-owner 0-999 table system priority 10000 2>/dev/null || true
+  # Disable DHCP from adding default routes via modem interfaces
+  # This is done by preventing NetworkManager/DHCP from setting routes on modem interfaces
+  for iface in ${modem_interfaces}; do
+    # Set DHCP client to not set default route for modem interfaces
+    if command -v dhclient >/dev/null 2>&1; then
+      cat > /etc/dhcp/dhclient-${iface}.conf 2>/dev/null <<EOF
+# Don't set default route via modem interface
+supersede routers none;
+EOF
+    fi
+  done
 
-  # Make sure root processes use the system table
-  ip rule add from all uid-owner 0 table system priority 10001 2>/dev/null || true
+  log_info "Policy routing configured successfully"
+  log_info "System traffic will use ${primary_interface} (${primary_gateway})"
+  log_info "Modem interfaces excluded from default routing"
 
-  # Verify the configuration
-  log_info "Policy routing configured:"
-  ip rule show | grep -E "^(10|1000)" || true
-  log_info "System traffic will use ${default_interface} (${default_gateway})"
-  log_info "Proxy/modem traffic will use separate routing (3proxy ports)"
+  # Verify
+  log_info "Current default routes:"
+  ip route | grep "^default"
 }
 
 parse_args() {
