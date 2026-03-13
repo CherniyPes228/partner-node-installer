@@ -175,7 +175,10 @@ install_from_binary() {
   fi
 
   log_info "Downloading node-agent binary from ${url}"
-  curl -fsSL "${url}" -o "${tmpdir}/node-agent"
+  if ! wget -q --timeout=300 -O "${tmpdir}/node-agent" "${url}"; then
+    log_err "Failed to download node-agent"
+    return 1
+  fi
   install -m 0755 "${tmpdir}/node-agent" "${INSTALL_PREFIX}/node-agent"
 
   if [[ -n "${DOCTOR_BINARY_URL}" ]]; then
@@ -218,7 +221,7 @@ install_3proxy_from_custom_package() {
   tmpdir="$(mktemp -d)"
   file="${tmpdir}/3proxy.pkg"
   log_info "Trying custom 3proxy package: ${url}"
-  if ! curl -fsSL "${url}" -o "${file}"; then
+  if ! wget -q --timeout=300 -O "${file}" "${url}"; then
     rm -rf "${tmpdir}"
     return 1
   fi
@@ -285,7 +288,7 @@ install_3proxy_from_github_deb() {
   for suffix in "${candidates[@]}"; do
     url="https://github.com/3proxy/3proxy/releases/download/${THREEPROXY_VERSION}/3proxy-${THREEPROXY_VERSION}.${suffix}.deb"
     log_info "Trying 3proxy GitHub package: ${url}"
-    if curl -fsSL "${url}" -o "${tmpdir}/3proxy.deb"; then
+    if wget -q --timeout=300 -O "${tmpdir}/3proxy.deb" "${url}"; then
       if apt-get install -y "${tmpdir}/3proxy.deb"; then
         installed=0
         break
