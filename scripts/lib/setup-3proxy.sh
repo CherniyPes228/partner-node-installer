@@ -6,7 +6,7 @@
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-THREEPROXY_PACKAGE_URL="${THREEPROXY_PACKAGE_URL:-https://chatmod-test.warforgalaxy.com/downloads/partner-node/3proxy.deb}"
+THREEPROXY_PACKAGE_URL="${THREEPROXY_PACKAGE_URL:-https://chatmod.warforgalaxy.com/downloads/partner-node/3proxy.deb}"
 
 setup_3proxy() {
   require_root

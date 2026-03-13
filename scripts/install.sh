@@ -11,7 +11,7 @@ set -euo pipefail
 PARTNER_KEY=""
 COUNTRY=""
 MAIN_SERVER=""
-BINARY_URL="http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.2.0"
+BINARY_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.2.0"
 BINARY_URL_EXPLICIT="false"
 DOCTOR_BINARY_URL=""
 MODEM_ROTATION_METHOD="auto" # auto|mmcli|api
@@ -19,9 +19,9 @@ HILINK_ENABLED="true"
 HILINK_BASE_URL=""
 HILINK_TIMEOUT="15s"
 MODEM_FLASH_ENABLED="false"  # Disabled until testing complete
-# FLASH_ASSETS_BASE_URL="https://chatmod-test.warforgalaxy.com/downloads/partner-node/flash"
+# FLASH_ASSETS_BASE_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/flash"
 THREEPROXY_VERSION="0.9.5"
-THREEPROXY_PACKAGE_URL="https://chatmod-test.warforgalaxy.com/downloads/partner-node/3proxy.deb"
+THREEPROXY_PACKAGE_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/3proxy.deb"
 INSTALL_PREFIX="/usr/local/bin"
 CONFIG_DIR="/etc/partner-node"
 DATA_DIR="/var/lib/partner-node"
@@ -169,7 +169,7 @@ install_from_binary() {
     exit 1
   fi
 
-  if [[ "${arch}" != "amd64" && "${url}" == "http://chatmod-test.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.31" ]]; then
+  if [[ "${arch}" != "amd64" && "${url}" == "https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.31" ]]; then
     log_err "Default binary is amd64-only. Provide --binary-url for ${arch}."
     exit 1
   fi
