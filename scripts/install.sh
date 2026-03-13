@@ -483,22 +483,28 @@ autodetect_hilink_base_url() {
 
 autodetect_country() {
   local value
+
+  # Try ipapi.co
   value="$(curl -fsS --max-time 5 https://ipapi.co/country 2>/dev/null || true)"
   value="$(echo "${value}" | tr '[:lower:]' '[:upper:]' | tr -d '\r\n[:space:]')"
+  log_debug "ipapi.co returned: '${value}'"
   if [[ "${value}" =~ ^[A-Z]{2}$ ]]; then
     COUNTRY="${value}"
     log_info "Detected country from IP: ${COUNTRY}"
     return 0
   fi
 
+  # Try ipinfo.io
   value="$(curl -fsS --max-time 5 https://ipinfo.io/country 2>/dev/null || true)"
   value="$(echo "${value}" | tr '[:lower:]' '[:upper:]' | tr -d '\r\n[:space:]')"
+  log_debug "ipinfo.io returned: '${value}'"
   if [[ "${value}" =~ ^[A-Z]{2}$ ]]; then
     COUNTRY="${value}"
     log_info "Detected country from IP: ${COUNTRY}"
     return 0
   fi
 
+  log_debug "Country auto-detection failed, all services returned invalid data"
   return 1
 }
 
