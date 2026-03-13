@@ -1176,6 +1176,43 @@ start_self_update_timer() {
   log_info "Self-update timer is active (${AUTO_UPDATE_INTERVAL})."
 }
 
+configure_policy_routing() {
+  log_info "Configuring policy routing to route system traffic via WiFi/Ethernet"
+
+  # Get current default gateway and interface
+  local default_gateway default_interface
+  default_gateway=$(ip route | grep "^default " | awk '{print $3}' | head -1)
+  default_interface=$(ip route | grep "^default " | awk '{print $5}' | head -1)
+
+  if [[ -z "${default_gateway}" ]] || [[ -z "${default_interface}" ]]; then
+    log_warn "Could not detect default gateway/interface. Skipping policy routing setup."
+    return 0
+  fi
+
+  log_info "Default gateway: ${default_gateway} on interface: ${default_interface}"
+
+  # Create a separate routing table for system/default traffic (priority 10)
+  if ! grep -q "^10[[:space:]]" /etc/iproute2/rt_tables 2>/dev/null; then
+    echo "10  system" >> /etc/iproute2/rt_tables
+  fi
+
+  # Add default route to the system table pointing to WiFi/Ethernet gateway
+  ip route add default via "${default_gateway}" table system dev "${default_interface}" 2>/dev/null || true
+
+  # Add rules to ensure system processes use WiFi/Ethernet
+  # Priority 10000: system UIDs (0-999) use 'system' table (WiFi)
+  ip rule add from all uid-owner 0-999 table system priority 10000 2>/dev/null || true
+
+  # Make sure root processes use the system table
+  ip rule add from all uid-owner 0 table system priority 10001 2>/dev/null || true
+
+  # Verify the configuration
+  log_info "Policy routing configured:"
+  ip rule show | grep -E "^(10|1000)" || true
+  log_info "System traffic will use ${default_interface} (${default_gateway})"
+  log_info "Proxy/modem traffic will use separate routing (3proxy ports)"
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1276,6 +1313,7 @@ main() {
   write_config
   harden_secret_permissions
   configure_firewall || true
+  configure_policy_routing || true
   write_systemd_unit
   # write_flash_script  # Disabled - modem flashing not yet tested
   start_service
