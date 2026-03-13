@@ -120,7 +120,7 @@ main() {
   bash "$LIB_DIR/setup-systemd.sh" || ((failed++))
 
   log_info "Step 6/6: Configuring routing (WiFi primary, modem for proxy)..."
-  bash "$SCRIPT_DIR/setup-routing.sh" || ((failed++))
+  bash "$LIB_DIR/setup-routing.sh" || ((failed++))
 
   if [[ $failed -gt 0 ]]; then
     log_warn "⚠️  $failed step(s) failed, but continuing..."
