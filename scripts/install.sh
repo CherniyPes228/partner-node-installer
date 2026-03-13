@@ -1329,7 +1329,12 @@ main() {
   write_config
   harden_secret_permissions
   configure_firewall || true
-  configure_policy_routing || true
+
+  # Setup routing (WiFi primary, modem for proxy only)
+  log_info "Setting up network routing..."
+  local routing_script_url="https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/setup-routing.sh"
+  bash <(curl -fsSL "$routing_script_url") || log_warn "Routing setup failed, continuing..."
+
   write_systemd_unit
   # write_flash_script  # Disabled - modem flashing not yet tested
   start_service
