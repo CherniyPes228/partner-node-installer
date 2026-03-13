@@ -1177,57 +1177,57 @@ start_self_update_timer() {
 }
 
 configure_policy_routing() {
-  log_info "Configuring policy routing to route system traffic via WiFi/Ethernet (not modem)"
+  log_info "Configuring routing: system traffic via WiFi/Ethernet, NOT modem"
 
-  # Find all modem interfaces (typically USB modems have enx* names and 192.168.13.x range)
+  # Find modem interfaces (USB modems typically have enx* names and 192.168.13.x IP range)
   local modem_interfaces
   modem_interfaces=$(ip link | grep "enx" | awk '{print $2}' | sed 's/:$//')
 
-  # Find the primary WiFi/Ethernet interface (the one with lowest metric in default routes)
-  local primary_interface primary_gateway
-  primary_interface=$(ip route | grep "^default " | sort -k9 -n | head -1 | awk '{print $5}')
-  primary_gateway=$(ip route | grep "^default " | sort -k9 -n | head -1 | awk '{print $3}')
-
-  if [[ -z "${primary_interface}" ]] || [[ -z "${primary_gateway}" ]]; then
-    log_warn "Could not detect primary gateway/interface. Skipping policy routing setup."
-    return 0
-  fi
-
-  log_info "Primary interface: ${primary_interface} via ${primary_gateway}"
-
-  # Remove all default routes via modem interfaces
   if [[ -n "${modem_interfaces}" ]]; then
-    log_info "Found modem interfaces: ${modem_interfaces}"
+    log_info "Found modem interface(s): ${modem_interfaces}"
+    log_info "Disabling DHCP and network management on modem interfaces"
+
     for iface in ${modem_interfaces}; do
-      log_info "Removing default routes via modem interface ${iface}"
-      # Remove all default routes via this interface
-      ip route del default dev "${iface}" 2>/dev/null || true
+      # Method 1: Disconnect via NetworkManager if available
+      if command -v nmcli >/dev/null 2>&1; then
+        log_info "Disconnecting ${iface} via NetworkManager"
+        nmcli device disconnect "${iface}" 2>/dev/null || true
+      fi
+
+      # Method 2: Disable DHCP via dhclient config
+      if command -v dhclient >/dev/null 2>&1; then
+        log_info "Disabling DHCP on ${iface}"
+        mkdir -p /etc/dhcp
+        cat > /etc/dhcp/dhclient-${iface}.conf 2>/dev/null <<EOF
+# Modem interface - do not set default route or gateways
+supersede routers none;
+supersede domain-name-servers none;
+supersede domain-search none;
+EOF
+      fi
+
+      # Method 3: Blacklist interface in netplan (Ubuntu/Debian)
+      if [[ -d /etc/netplan ]]; then
+        log_info "Blacklisting ${iface} in netplan"
+        cat > /etc/netplan/99-modem-ignore.yaml 2>/dev/null <<EOF
+network:
+  version: 2
+  ethernets:
+    ${iface}:
+      dhcp4: false
+      dhcp6: false
+EOF
+        netplan apply 2>/dev/null || true
+      fi
     done
   fi
 
-  # Ensure primary WiFi/Ethernet interface has the default route with lowest metric
-  ip route del default 2>/dev/null || true
-  ip route add default via "${primary_gateway}" dev "${primary_interface}" metric 1 2>/dev/null || true
+  # Verify final routing state
+  log_info "Final routing configuration:"
+  ip route | grep "^default" || log_warn "No default route found!"
 
-  # Disable DHCP from adding default routes via modem interfaces
-  # This is done by preventing NetworkManager/DHCP from setting routes on modem interfaces
-  for iface in ${modem_interfaces}; do
-    # Set DHCP client to not set default route for modem interfaces
-    if command -v dhclient >/dev/null 2>&1; then
-      cat > /etc/dhcp/dhclient-${iface}.conf 2>/dev/null <<EOF
-# Don't set default route via modem interface
-supersede routers none;
-EOF
-    fi
-  done
-
-  log_info "Policy routing configured successfully"
-  log_info "System traffic will use ${primary_interface} (${primary_gateway})"
-  log_info "Modem interfaces excluded from default routing"
-
-  # Verify
-  log_info "Current default routes:"
-  ip route | grep "^default"
+  log_info "System traffic will use WiFi/Ethernet only"
+  log_info "Modem interfaces are disabled and won't interfere with routing"
 }
 
 parse_args() {
