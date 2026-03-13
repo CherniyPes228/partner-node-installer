@@ -1181,53 +1181,52 @@ configure_policy_routing() {
 
   # Find modem interfaces (USB modems typically have enx* names and 192.168.13.x IP range)
   local modem_interfaces
-  modem_interfaces=$(ip link | grep "enx" | awk '{print $2}' | sed 's/:$//')
+  modem_interfaces=$(ip link 2>/dev/null | grep "enx" | awk '{print $2}' | sed 's/:$//')
 
   if [[ -n "${modem_interfaces}" ]]; then
     log_info "Found modem interface(s): ${modem_interfaces}"
-    log_info "Disabling DHCP and network management on modem interfaces"
 
+    # Immediately disable modem interfaces
     for iface in ${modem_interfaces}; do
-      # Method 1: Disconnect via NetworkManager if available
+      log_info "Disabling modem interface ${iface}"
+      ip link set "${iface}" down 2>/dev/null || true
+
+      # Also try NetworkManager if available
       if command -v nmcli >/dev/null 2>&1; then
-        log_info "Disconnecting ${iface} via NetworkManager"
         nmcli device disconnect "${iface}" 2>/dev/null || true
       fi
-
-      # Method 2: Disable DHCP via dhclient config
-      if command -v dhclient >/dev/null 2>&1; then
-        log_info "Disabling DHCP on ${iface}"
-        mkdir -p /etc/dhcp
-        cat > /etc/dhcp/dhclient-${iface}.conf 2>/dev/null <<EOF
-# Modem interface - do not set default route or gateways
-supersede routers none;
-supersede domain-name-servers none;
-supersede domain-search none;
-EOF
-      fi
-
-      # Method 3: Blacklist interface in netplan (Ubuntu/Debian)
-      if [[ -d /etc/netplan ]]; then
-        log_info "Blacklisting ${iface} in netplan"
-        cat > /etc/netplan/99-modem-ignore.yaml 2>/dev/null <<EOF
-network:
-  version: 2
-  ethernets:
-    ${iface}:
-      dhcp4: false
-      dhcp6: false
-EOF
-        netplan apply 2>/dev/null || true
-      fi
     done
+
+    # Create systemd service to ensure modem stays disabled after reboot
+    log_info "Creating systemd service to keep modem disabled"
+    mkdir -p /etc/systemd/system
+    cat > /etc/systemd/system/disable-modem.service <<'SERVICEOF'
+[Unit]
+Description=Disable modem network interfaces (use WiFi/Ethernet only)
+After=network-pre.target
+Before=network.target
+ConditionVirtualization=!container
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'for iface in $(ip link 2>/dev/null | grep enx | awk "{print \$2}" | sed s/:// ); do ip link set $iface down 2>/dev/null || true; done'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+SERVICEOF
+    chmod 644 /etc/systemd/system/disable-modem.service
+    systemctl daemon-reload
+    systemctl enable disable-modem.service
+    log_info "Systemd service enabled for modem management"
+  else
+    log_info "No modem interfaces detected"
   fi
 
   # Verify final routing state
   log_info "Final routing configuration:"
-  ip route | grep "^default" || log_warn "No default route found!"
-
+  ip route 2>/dev/null | grep "^default" || log_warn "No default route found!"
   log_info "System traffic will use WiFi/Ethernet only"
-  log_info "Modem interfaces are disabled and won't interfere with routing"
 }
 
 parse_args() {
