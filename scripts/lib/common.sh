@@ -59,8 +59,8 @@ download_file() {
 
   while [[ $attempt -le $max_attempts ]]; do
     log_info "Downloading $url (attempt $attempt/$max_attempts)"
-    # Use wget with 5-minute timeout for large files
-    if wget -q --timeout=300 -O "$dest" "$url"; then
+    # Use wget with progress bar and 5-minute timeout for large files
+    if wget --progress=bar:force:noscroll --timeout=300 -O "$dest" "$url" 2>&1; then
       log_info "Downloaded successfully"
       return 0
     fi
