@@ -17,6 +17,33 @@ setup_systemd() {
 
   mkdir -p /etc/systemd/system
 
+  # Create wrapper script for node-agent (ensures WiFi is default route)
+  log_info "Creating node-agent wrapper script (for routing fix)"
+  cat > $INSTALL_PREFIX/node-agent-wrapper.sh <<'WRAPPER'
+#!/bin/bash
+# Pre-startup hook for node-agent
+# Ensures WiFi is default route, not modem
+
+# Remove all default routes from modem interfaces (enx*)
+ip route show 2>/dev/null | grep "^default" | grep "enx" | while read route; do
+  ip route del $route 2>/dev/null || true
+done
+
+# Ensure a WiFi/Ethernet default route exists
+if ! ip route show 2>/dev/null | grep -q "^default"; then
+  # Find the primary Ethernet/WiFi interface
+  local primary_iface=$(ip route show | grep "^[0-9]" | head -1 | awk '{print $NF}')
+  if [[ -n "$primary_iface" ]]; then
+    ip route add default via 192.168.0.1 dev "$primary_iface" 2>/dev/null || true
+  fi
+fi
+
+# Now start the actual node-agent
+exec $INSTALL_PREFIX/node-agent "$@"
+WRAPPER
+
+  chmod +x $INSTALL_PREFIX/node-agent-wrapper.sh
+
   # Create node-agent service
   log_info "Creating $SERVICE_NAME.service"
   cat > /etc/systemd/system/$SERVICE_NAME.service <<EOF
@@ -29,7 +56,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-ExecStart=$INSTALL_PREFIX/node-agent -config $CONFIG_DIR/config.yaml
+ExecStart=$INSTALL_PREFIX/node-agent-wrapper.sh -config $CONFIG_DIR/config.yaml
 Restart=always
 RestartSec=5
 StandardOutput=journal
