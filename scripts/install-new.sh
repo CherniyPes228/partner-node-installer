@@ -104,23 +104,26 @@ main() {
   # Run setup scripts in sequence
   local failed=0
 
-  log_info "Step 1/6: Installing system dependencies..."
+  log_info "Step 1/7: Installing system dependencies..."
   bash "$LIB_DIR/setup-dependencies.sh" || ((failed++))
 
-  log_info "Step 2/6: Setting up 3proxy..."
+  log_info "Step 2/7: Setting up 3proxy..."
   bash "$LIB_DIR/setup-3proxy.sh" || ((failed++))
 
-  log_info "Step 3/6: Downloading node-agent..."
+  log_info "Step 3/7: Downloading node-agent..."
   bash "$LIB_DIR/setup-node-agent.sh" || ((failed++))
 
-  log_info "Step 4/6: Creating configuration..."
+  log_info "Step 4/7: Creating configuration..."
   bash "$LIB_DIR/setup-config.sh" || ((failed++))
 
-  log_info "Step 5/6: Setting up systemd units..."
+  log_info "Step 5/7: Setting up systemd units..."
   bash "$LIB_DIR/setup-systemd.sh" || ((failed++))
 
-  log_info "Step 6/6: Configuring routing (WiFi primary, modem for proxy)..."
+  log_info "Step 6/7: Configuring routing (WiFi primary, modem for proxy)..."
   bash "$LIB_DIR/setup-routing.sh" || ((failed++))
+
+  log_info "Step 7/7: Configuring USB modem auto-DHCP..."
+  bash "$LIB_DIR/setup-modem-dhcp.sh" || ((failed++))
 
   if [[ $failed -gt 0 ]]; then
     log_warn "⚠️  $failed step(s) failed, but continuing..."
