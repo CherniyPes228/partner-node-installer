@@ -18,7 +18,8 @@ log_info "Configuring auto-DHCP for USB modems..."
 log_info "  Creating netplan config for USB modem auto-DHCP..."
 sudo tee "$NETPLAN_FILE" > /dev/null << 'NETPLAN'
 # Auto-enable DHCP for USB modems (enx* interfaces)
-# This ensures modems like Huawei E3372 automatically get IP when connected
+# With lower priority than WiFi so PC traffic uses WiFi by default
+# Only 3proxy proxy traffic routes through modem
 network:
   version: 2
   renderer: networkd
@@ -28,10 +29,10 @@ network:
         name: "enx*"
       dhcp4: true
       dhcp6: true
-      routes:
-        - to: 0.0.0.0/0
-          via: 192.168.13.1
-          metric: 1000  # Lower priority than WiFi (600)
+      dhcp4-overrides:
+        route-metric: 1000  # Higher than WiFi (600), so WiFi is preferred
+      dhcp6-overrides:
+        route-metric: 1000
 NETPLAN
 
 # Fix permissions (netplan requires strict permissions)
@@ -49,6 +50,7 @@ sudo tee "$SETUP_SCRIPT" > /dev/null << 'SCRIPT'
 #!/bin/bash
 # Auto-configure USB modems with DHCP
 # This script ensures that USB modems (enx* interfaces) always get IP via DHCP
+# with lower priority than WiFi so PC traffic uses WiFi
 
 set -euo pipefail
 
@@ -59,6 +61,7 @@ echo "Setting up auto-DHCP for USB modems..."
 # Create netplan config for USB modems
 sudo tee "$NETPLAN_FILE" > /dev/null << 'NETPLAN'
 # Auto-enable DHCP for USB modems (enx* interfaces)
+# With lower priority than WiFi so PC traffic uses WiFi by default
 network:
   version: 2
   renderer: networkd
@@ -68,10 +71,10 @@ network:
         name: "enx*"
       dhcp4: true
       dhcp6: true
-      routes:
-        - to: 0.0.0.0/0
-          via: 192.168.13.1
-          metric: 1000
+      dhcp4-overrides:
+        route-metric: 1000
+      dhcp6-overrides:
+        route-metric: 1000
 NETPLAN
 
 # Fix permissions
