@@ -17,15 +17,16 @@ fi
 
 set -euo pipefail
 
-LIB_DIR="$SCRIPT_DIR/lib"
+# Always use /tmp for lib scripts in pipe mode (curl | bash)
+# This ensures scripts can write files regardless of current working directory
+LIB_DIR="/tmp/partner-node-installer-lib-$$"
+mkdir -p "$LIB_DIR"
 
-# If lib dir doesn't exist (curl pipe mode), download and source inline
-if [[ ! -f "$LIB_DIR/common.sh" ]]; then
-	echo "⚠️  Running in pipe mode - downloading common.sh..."
-	mkdir -p /tmp/partner-node-installer/lib
-	curl -fsSL https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/lib/common.sh -o /tmp/partner-node-installer/lib/common.sh
-	LIB_DIR="/tmp/partner-node-installer/lib"
-fi
+# Download common.sh and source it
+curl -fsSL https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/lib/common.sh -o "$LIB_DIR/common.sh" 2>/dev/null || {
+	echo "❌ Failed to download common.sh - check internet connection"
+	exit 1
+}
 
 # Source common utilities
 source "$LIB_DIR/common.sh"
@@ -122,11 +123,18 @@ main() {
   # Run setup scripts in sequence
   local failed=0
 
-  # Download all lib scripts in pipe mode
-  if [[ "$LIB_DIR" == "/tmp/partner-node-installer/lib" ]]; then
-    for script in setup-dependencies setup-3proxy setup-node-agent setup-config setup-systemd setup-routing setup-modem-dhcp; do
-      curl -fsSL "https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/lib/$script.sh" -o "$LIB_DIR/$script.sh"
-    done
+  # Download all lib scripts (for pipe mode)
+  log_info "Downloading setup scripts..."
+  for script in setup-dependencies setup-3proxy setup-node-agent setup-config setup-systemd setup-routing setup-modem-dhcp; do
+    curl -fsSL "https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/lib/$script.sh" -o "$LIB_DIR/$script.sh" 2>/dev/null || {
+      log_err "Failed to download $script.sh"
+      ((failed++))
+    }
+  done
+
+  if [[ $failed -gt 0 ]]; then
+    log_err "Failed to download some scripts - check internet connection"
+    exit 1
   fi
 
   log_info "Step 1/7: Installing system dependencies..."
@@ -177,6 +185,9 @@ main() {
   log_info "  2. View logs: journalctl -u $SERVICE_NAME -f"
   log_info "  3. Check node on MAIN server"
   log_info ""
+
+  # Cleanup temp directory
+  rm -rf "$LIB_DIR"
 }
 
 # Run main
