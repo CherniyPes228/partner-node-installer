@@ -6,8 +6,24 @@ set -euo pipefail
 # Main orchestrator that calls individual setup scripts
 ###############################################################################
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Handle being called via curl | bash
+SCRIPT_DIR="${BASH_SOURCE[0]:-}"
+if [[ -z "$SCRIPT_DIR" ]]; then
+	SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+fi
+if [[ ! -d "$SCRIPT_DIR" ]]; then
+	SCRIPT_DIR="."
+fi
+
 LIB_DIR="$SCRIPT_DIR/lib"
+
+# If lib dir doesn't exist (curl pipe mode), download and source inline
+if [[ ! -f "$LIB_DIR/common.sh" ]]; then
+	echo "⚠️  Running in pipe mode - downloading common.sh..."
+	mkdir -p /tmp/partner-node-installer/lib
+	curl -fsSL https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/lib/common.sh -o /tmp/partner-node-installer/lib/common.sh
+	LIB_DIR="/tmp/partner-node-installer/lib"
+fi
 
 # Source common utilities
 source "$LIB_DIR/common.sh"
@@ -103,6 +119,13 @@ main() {
 
   # Run setup scripts in sequence
   local failed=0
+
+  # Download all lib scripts in pipe mode
+  if [[ "$LIB_DIR" == "/tmp/partner-node-installer/lib" ]]; then
+    for script in setup-dependencies setup-3proxy setup-node-agent setup-config setup-systemd setup-routing setup-modem-dhcp; do
+      curl -fsSL "https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/lib/$script.sh" -o "$LIB_DIR/$script.sh"
+    done
+  fi
 
   log_info "Step 1/7: Installing system dependencies..."
   bash "$LIB_DIR/setup-dependencies.sh" || ((failed++))
