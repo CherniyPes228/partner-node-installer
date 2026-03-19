@@ -41,6 +41,7 @@ agent:
   health_check_interval: "30s"
 
 api:
+  partner_key: "$PARTNER_KEY"
   main_server: "$MAIN_SERVER"
   request_timeout: "30s"
   retry_max_attempts: 3
