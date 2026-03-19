@@ -518,8 +518,24 @@ create_user_and_dirs() {
 }
 
 write_config() {
-  local config_path
+  local config_path old_partner_key old_country
   config_path="${CONFIG_DIR}/config.yaml"
+
+  # Сохраняем старые значения если конфиг существует
+  if [[ -f "${config_path}" ]]; then
+    old_partner_key=$(grep "partner_key:" "${config_path}" 2>/dev/null | cut -d'"' -f2)
+    old_country=$(grep "country:" "${config_path}" 2>/dev/null | awk '{print $2}' | tr -d '"')
+
+    if [[ -z "${PARTNER_KEY}" && -n "${old_partner_key}" ]]; then
+      PARTNER_KEY="${old_partner_key}"
+      log_info "✅ Сохранён partner_key из конфига"
+    fi
+    if [[ -z "${COUNTRY}" && -n "${old_country}" ]]; then
+      COUNTRY="${old_country}"
+      log_info "✅ Сохранена страна из конфига: ${COUNTRY}"
+    fi
+  fi
+
   cat > "${config_path}" <<EOF
 api:
   main_server: "${MAIN_SERVER}"
