@@ -55,6 +55,12 @@ setup_node_agent() {
   # Cleanup
   rm -f "$temp_binary"
 
+  # Restart service if it exists
+  if systemctl is-active --quiet node-agent 2>/dev/null; then
+    log_info "Restarting node-agent service with new binary..."
+    systemctl restart node-agent || log_warn "Failed to restart node-agent service"
+  fi
+
   log_info "✅ node-agent setup complete"
 }
 
