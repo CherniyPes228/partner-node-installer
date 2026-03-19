@@ -117,7 +117,7 @@ main() {
   # Auto-detect country from IP if not provided
   if [[ -z "$COUNTRY" ]]; then
     log_info "Detecting country from IP..."
-    COUNTRY=$(curl -s -m 5 "https://ipapi.co/json/" 2>/dev/null | grep -o '"country_code":"[^"]*"' | cut -d'"' -f4)
+    COUNTRY=$(curl -s -m 5 "https://ipapi.co/json/" 2>/dev/null | grep '"country_code"' | head -1 | sed 's/.*"country_code":\s*"\([^"]*\)".*/\1/' | tr '[:lower:]' '[:upper:]')
     if [[ -z "$COUNTRY" ]]; then
       log_warn "Could not detect country, using default: US"
       COUNTRY="US"
