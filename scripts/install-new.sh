@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-set -euo pipefail
 
 ###############################################################################
 # Partner Node Zero-Touch Installer (v2 - Modular)
@@ -7,13 +6,16 @@ set -euo pipefail
 ###############################################################################
 
 # Handle being called via curl | bash
-SCRIPT_DIR="${BASH_SOURCE[0]:-}"
-if [[ -z "$SCRIPT_DIR" ]]; then
+SCRIPT_DIR=""
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+	SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+elif [[ -n "${0:-}" ]]; then
 	SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-fi
-if [[ ! -d "$SCRIPT_DIR" ]]; then
+else
 	SCRIPT_DIR="."
 fi
+
+set -euo pipefail
 
 LIB_DIR="$SCRIPT_DIR/lib"
 
