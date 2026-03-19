@@ -114,9 +114,22 @@ main() {
     exit 1
   fi
 
+  # Auto-detect country from IP if not provided
+  if [[ -z "$COUNTRY" ]]; then
+    log_info "Detecting country from IP..."
+    COUNTRY=$(curl -s -m 5 "https://ipapi.co/json/" 2>/dev/null | grep -o '"country_code":"[^"]*"' | cut -d'"' -f4)
+    if [[ -z "$COUNTRY" ]]; then
+      log_warn "Could not detect country, using default: US"
+      COUNTRY="US"
+    else
+      log_info "Detected country from IP: $COUNTRY"
+    fi
+  fi
+
   log_info "Configuration:"
   log_info "  Partner Key: ${PARTNER_KEY:0:10}..."
   log_info "  MAIN Server: $MAIN_SERVER"
+  log_info "  Country: $COUNTRY"
   log_info "  Binary URL: $BINARY_URL"
   log_info ""
 
