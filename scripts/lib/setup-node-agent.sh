@@ -37,6 +37,24 @@ setup_node_agent() {
     return 1
   fi
 
+  # Stop service and kill any existing processes before replacing binary
+  if systemctl is-active --quiet partner-node 2>/dev/null; then
+    log_info "Stopping partner-node service..."
+    systemctl stop partner-node || true
+    sleep 1
+  fi
+
+  # Kill any lingering node-agent processes
+  log_info "Ensuring no node-agent processes are running..."
+  killall -9 node-agent 2>/dev/null || true
+  sleep 1
+
+  # Remove old binary if it exists
+  if [[ -f "$INSTALL_PREFIX/node-agent" ]]; then
+    log_info "Removing old node-agent binary..."
+    rm -f "$INSTALL_PREFIX/node-agent"
+  fi
+
   # Install binary
   log_info "Installing node-agent to $INSTALL_PREFIX/node-agent"
   cp "$temp_binary" "$INSTALL_PREFIX/node-agent"
@@ -55,10 +73,11 @@ setup_node_agent() {
   # Cleanup
   rm -f "$temp_binary"
 
-  # Restart service if it exists
-  if systemctl is-active --quiet node-agent 2>/dev/null; then
-    log_info "Restarting node-agent service with new binary..."
-    systemctl restart node-agent || log_warn "Failed to restart node-agent service"
+  # Start service
+  SERVICE_NAME="${SERVICE_NAME:-partner-node}"
+  if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
+    log_info "Starting $SERVICE_NAME service with new binary..."
+    systemctl start "$SERVICE_NAME" || log_warn "Failed to start $SERVICE_NAME service"
   fi
 
   log_info "✅ node-agent setup complete"
