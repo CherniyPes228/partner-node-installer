@@ -121,14 +121,14 @@ main() {
     # Try multiple geolocation services with timeouts
     COUNTRY=""
 
-    # Try ifconfig.co first (returns JSON with country)
+    # Try ifconfig.co first (returns JSON with country_iso)
     if [[ -z "$COUNTRY" ]]; then
-      COUNTRY=$(curl -s --max-time 3 "https://ifconfig.co/json" 2>/dev/null | grep -o '"country":"[^"]*"' | cut -d'"' -f4 | tr '[:lower:]' '[:upper:]')
+      COUNTRY=$(curl -s --max-time 3 "https://ifconfig.co/json" 2>/dev/null | grep -o '"country_iso":"[^"]*"' | cut -d'"' -f4 | tr '[:lower:]' '[:upper:]')
     fi
 
-    # Fallback to ip-api.com (faster, but requires timeout)
+    # Fallback to ip-api.com (returns JSON with countryCode)
     if [[ -z "$COUNTRY" ]]; then
-      COUNTRY=$(curl -s --max-time 3 "http://ip-api.com/json" 2>/dev/null | grep -o '"country":"[^"]*"' | head -1 | cut -d'"' -f4)
+      COUNTRY=$(curl -s --max-time 3 "http://ip-api.com/json" 2>/dev/null | grep -o '"countryCode":"[^"]*"' | cut -d'"' -f4)
     fi
 
     # If still empty, use default
