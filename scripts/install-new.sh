@@ -117,7 +117,21 @@ main() {
   # Auto-detect country from IP if not provided
   if [[ -z "$COUNTRY" ]]; then
     log_info "Detecting country from IP..."
-    COUNTRY=$(curl -s -m 5 "https://ipapi.co/json/" 2>/dev/null | grep '"country_code"' | head -1 | sed 's/.*"country_code":\s*"\([^"]*\)".*/\1/' | tr '[:lower:]' '[:upper:]')
+
+    # Try multiple geolocation services with timeouts
+    COUNTRY=""
+
+    # Try ifconfig.co first (returns JSON with country)
+    if [[ -z "$COUNTRY" ]]; then
+      COUNTRY=$(curl -s --max-time 3 "https://ifconfig.co/json" 2>/dev/null | grep -o '"country":"[^"]*"' | cut -d'"' -f4 | tr '[:lower:]' '[:upper:]')
+    fi
+
+    # Fallback to ip-api.com (faster, but requires timeout)
+    if [[ -z "$COUNTRY" ]]; then
+      COUNTRY=$(curl -s --max-time 3 "http://ip-api.com/json" 2>/dev/null | grep -o '"country":"[^"]*"' | head -1 | cut -d'"' -f4)
+    fi
+
+    # If still empty, use default
     if [[ -z "$COUNTRY" ]]; then
       log_warn "Could not detect country, using default: US"
       COUNTRY="US"
