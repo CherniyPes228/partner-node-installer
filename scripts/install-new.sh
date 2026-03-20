@@ -122,13 +122,13 @@ main() {
     COUNTRY=""
 
     # Try ifconfig.co first (returns JSON with country_iso)
-    if [[ -z "$COUNTRY" ]]; then
-      COUNTRY=$(curl -s --max-time 3 "https://ifconfig.co/json" 2>/dev/null | grep -o '"country_iso":"[^"]*"' | cut -d'"' -f4 | tr '[:lower:]' '[:upper:]')
-    fi
+    log_info "  Trying ifconfig.co..."
+    COUNTRY=$(timeout 3 curl -s "https://ifconfig.co/json" 2>/dev/null | grep -o '"country_iso":"[^"]*"' | head -1 | cut -d'"' -f4 | tr '[:lower:]' '[:upper:]') || COUNTRY=""
 
     # Fallback to ip-api.com (returns JSON with countryCode)
     if [[ -z "$COUNTRY" ]]; then
-      COUNTRY=$(curl -s --max-time 3 "http://ip-api.com/json" 2>/dev/null | grep -o '"countryCode":"[^"]*"' | cut -d'"' -f4)
+      log_info "  Trying ip-api.com..."
+      COUNTRY=$(timeout 3 curl -s "http://ip-api.com/json" 2>/dev/null | grep -o '"countryCode":"[^"]*"' | head -1 | cut -d'"' -f4) || COUNTRY=""
     fi
 
     # If still empty, use default
