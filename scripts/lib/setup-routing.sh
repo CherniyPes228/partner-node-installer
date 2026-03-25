@@ -25,9 +25,10 @@ setup_routing() {
   # Remove all current default routes from modems
   for iface in $modem_interfaces; do
     log_info "Removing default route from modem interface: $iface"
-    ip route show | grep "^default" | grep "$iface" | while read route; do
+    while IFS= read -r route; do
+      [[ -z "$route" ]] && continue
       ip route del $route 2>/dev/null || true
-    done
+    done < <(ip route show 2>/dev/null | grep "^default" | grep "$iface" || true)
   done
 
   # Create enforcement script (runs via cron every minute)
