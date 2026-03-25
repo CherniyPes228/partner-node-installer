@@ -1,3 +1,9 @@
 .gomodcache/
 .gocache/
 *.log
+*.tmp
+.idea/
+.vscode/
+.DS_Store
+.env
+.env.local
