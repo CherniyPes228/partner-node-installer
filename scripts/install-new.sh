@@ -45,12 +45,16 @@ HILINK_ENABLED="true"
 HILINK_BASE_URL="http://192.168.13.1"
 HILINK_TIMEOUT="15s"
 THREEPROXY_PACKAGE_URL="https://chatmod-test.warforgalaxy.com/downloads/partner-node/3proxy.deb"
+UI_PORT="19090"
+UI_SERVICE_NAME="partner-node-ui"
+UI_DIR="/opt/partner-node-ui"
 
 # Export for use in sub-scripts
 export PARTNER_KEY MAIN_SERVER COUNTRY BINARY_URL INSTALL_PREFIX
 export CONFIG_DIR DATA_DIR LOG_DIR SERVICE_NAME
 export HILINK_ENABLED HILINK_BASE_URL HILINK_TIMEOUT
 export THREEPROXY_PACKAGE_URL
+export UI_PORT UI_SERVICE_NAME UI_DIR
 
 usage() {
   cat <<EOF
@@ -66,6 +70,7 @@ Optional:
   --country <code>            Country code for node (default: auto-detect)
   --binary-url <url>          Custom node-agent binary URL
   --install-prefix <dir>      Installation directory (default: /usr/local/bin)
+  --ui-port <port>            Local partner UI port (default: 19090)
   --help                       Show this help message
 
 Examples:
@@ -83,6 +88,7 @@ parse_args() {
       --country) COUNTRY="${2:-}"; shift 2 ;;
       --binary-url) BINARY_URL="${2:-}"; shift 2 ;;
       --install-prefix) INSTALL_PREFIX="${2:-}"; shift 2 ;;
+      --ui-port) UI_PORT="${2:-}"; shift 2 ;;
       --help|-h) usage; exit 0 ;;
       *)
         log_err "Unknown argument: $1"
@@ -111,6 +117,11 @@ main() {
   if [[ -z "$MAIN_SERVER" ]]; then
     log_err "Missing required: --main-server"
     usage
+    exit 1
+  fi
+
+  if ! [[ "$UI_PORT" =~ ^[0-9]+$ ]] || [[ "$UI_PORT" -lt 1 || "$UI_PORT" -gt 65535 ]]; then
+    log_err "Invalid --ui-port value: $UI_PORT"
     exit 1
   fi
 
@@ -145,6 +156,7 @@ main() {
   log_info "  MAIN Server: $MAIN_SERVER"
   log_info "  Country: $COUNTRY"
   log_info "  Binary URL: $BINARY_URL"
+  log_info "  UI Port: $UI_PORT"
   log_info ""
 
   # Run setup scripts in sequence
@@ -152,7 +164,7 @@ main() {
 
   # Download all lib scripts (for pipe mode)
   log_info "Downloading setup scripts..."
-  for script in setup-dependencies setup-3proxy setup-node-agent setup-config setup-systemd setup-routing setup-modem-dhcp; do
+  for script in setup-dependencies setup-3proxy setup-node-agent setup-config setup-systemd setup-routing setup-modem-dhcp setup-ui; do
     curl -fsSL "https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/lib/$script.sh" -o "$LIB_DIR/$script.sh" 2>/dev/null || {
       log_err "Failed to download $script.sh"
       ((failed++))
@@ -164,26 +176,29 @@ main() {
     exit 1
   fi
 
-  log_info "Step 1/7: Installing system dependencies..."
+  log_info "Step 1/8: Installing system dependencies..."
   bash "$LIB_DIR/setup-dependencies.sh" || ((failed++))
 
-  log_info "Step 2/7: Setting up 3proxy..."
+  log_info "Step 2/8: Setting up 3proxy..."
   bash "$LIB_DIR/setup-3proxy.sh" || ((failed++))
 
-  log_info "Step 3/7: Downloading node-agent..."
+  log_info "Step 3/8: Downloading node-agent..."
   bash "$LIB_DIR/setup-node-agent.sh" || ((failed++))
 
-  log_info "Step 4/7: Creating configuration..."
+  log_info "Step 4/8: Creating configuration..."
   bash "$LIB_DIR/setup-config.sh" || ((failed++))
 
-  log_info "Step 5/7: Setting up systemd units..."
+  log_info "Step 5/8: Setting up systemd units..."
   bash "$LIB_DIR/setup-systemd.sh" || ((failed++))
 
-  log_info "Step 6/7: Configuring routing (WiFi primary, modem for proxy)..."
+  log_info "Step 6/8: Configuring routing (WiFi primary, modem for proxy)..."
   bash "$LIB_DIR/setup-routing.sh" || ((failed++))
 
-  log_info "Step 7/7: Configuring USB modem auto-DHCP..."
+  log_info "Step 7/8: Configuring USB modem auto-DHCP..."
   bash "$LIB_DIR/setup-modem-dhcp.sh" || ((failed++))
+
+  log_info "Step 8/8: Setting up local partner UI..."
+  bash "$LIB_DIR/setup-ui.sh" || ((failed++))
 
   if [[ $failed -gt 0 ]]; then
     log_warn "⚠️  $failed step(s) failed, but continuing..."
@@ -210,7 +225,8 @@ main() {
   log_info "Next steps:"
   log_info "  1. Monitor service: systemctl status $SERVICE_NAME"
   log_info "  2. View logs: journalctl -u $SERVICE_NAME -f"
-  log_info "  3. Check node on MAIN server"
+  log_info "  3. Local UI: http://127.0.0.1:$UI_PORT"
+  log_info "  4. Check node on MAIN server"
   log_info ""
 
   # Cleanup temp directory
