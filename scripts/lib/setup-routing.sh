@@ -53,6 +53,24 @@ if ! ip route show 2>/dev/null | grep -q 'default via'; then
   # Try to add WiFi default route (192.168.0.1 is common gateway)
   ip route add default via 192.168.0.1 2>/dev/null || true
 fi
+
+# Build source-based routing for modem-side IPs so 3proxy traffic bound to
+# the local HiLink address leaves through the modem instead of WiFi.
+for iface in $(ip -o link show | awk -F': ' '{print $2}' | grep '^enx' || true); do
+  local_ip=$(ip -4 -o addr show dev "$iface" scope global 2>/dev/null | awk '{print $4}' | head -n 1 | cut -d/ -f1)
+  [ -z "$local_ip" ] && continue
+
+  prefix=$(echo "$local_ip" | awk -F. '{print $1 "." $2 "." $3}')
+  gateway="${prefix}.1"
+  table_id=$(echo "$iface" | cksum | awk '{print 1000 + ($1 % 200)}')
+
+  ip rule del from "${local_ip}/32" table "$table_id" 2>/dev/null || true
+  ip route flush table "$table_id" 2>/dev/null || true
+
+  ip route add "${prefix}.0/24" dev "$iface" src "$local_ip" table "$table_id" 2>/dev/null || true
+  ip route add default via "$gateway" dev "$iface" table "$table_id" 2>/dev/null || true
+  ip rule add from "${local_ip}/32" table "$table_id" priority "$table_id" 2>/dev/null || true
+done
 ENFORCEMENT_SCRIPT
 
   chmod +x /usr/local/bin/enforce-wifi-routing.sh
@@ -74,6 +92,9 @@ ENFORCEMENT_SCRIPT
   else
     log_info "Cron job already installed"
   fi
+
+  # Apply modem source-routing immediately; cron then keeps it in sync.
+  /usr/local/bin/enforce-wifi-routing.sh || true
 
   # Verify routing state
   log_info "Current routing configuration:"
