@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+
+###############################################################################
+# Partner Node Uninstaller
+# Removes partner-node services, configs, local UI and related helper scripts
+###############################################################################
+
+SCRIPT_DIR=""
+if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+elif [[ -n "${0:-}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+else
+  SCRIPT_DIR="."
+fi
+
+set -euo pipefail
+
+LIB_DIR="/tmp/partner-node-uninstall-lib-$$"
+mkdir -p "$LIB_DIR"
+
+curl -fsSL https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/lib/common.sh -o "$LIB_DIR/common.sh" 2>/dev/null || {
+  echo "Failed to download common.sh - check internet connection"
+  exit 1
+}
+
+source "$LIB_DIR/common.sh"
+
+PURGE_PACKAGES="false"
+KEEP_PROXY_CONFIG="false"
+SERVICE_NAME="${SERVICE_NAME:-partner-node}"
+UI_SERVICE_NAME="${UI_SERVICE_NAME:-partner-node-ui}"
+
+usage() {
+  cat <<EOF
+Partner Node Uninstaller
+
+Usage: $0 [OPTIONS]
+
+Optional:
+  --purge-packages      Also remove installed packages (3proxy, wireguard, modemmanager)
+  --keep-proxy-config   Keep /etc/3proxy/3proxy.conf
+  --help, -h            Show this help message
+
+Examples:
+  $0
+  curl -fsSL https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/uninstall.sh | sudo bash
+  curl -fsSL https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/uninstall.sh | sudo bash -s -- --purge-packages
+EOF
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --purge-packages) PURGE_PACKAGES="true"; shift ;;
+      --keep-proxy-config) KEEP_PROXY_CONFIG="true"; shift ;;
+      --help|-h) usage; exit 0 ;;
+      *)
+        log_err "Unknown argument: $1"
+        usage
+        exit 1
+        ;;
+    esac
+  done
+}
+
+stop_and_disable_service() {
+  local svc="$1"
+  if systemctl list-unit-files | grep -q "^${svc}\.service"; then
+    log_info "Stopping ${svc}.service"
+    systemctl stop "${svc}" 2>/dev/null || true
+    systemctl disable "${svc}" 2>/dev/null || true
+  fi
+  if systemctl list-unit-files | grep -q "^${svc}\.timer"; then
+    log_info "Stopping ${svc}.timer"
+    systemctl stop "${svc}.timer" 2>/dev/null || true
+    systemctl disable "${svc}.timer" 2>/dev/null || true
+  fi
+}
+
+remove_if_exists() {
+  local path="$1"
+  if [[ -e "$path" || -L "$path" ]]; then
+    rm -rf "$path"
+    log_info "Removed $path"
+  fi
+}
+
+remove_cron_entry() {
+  local pattern="$1"
+  local current
+  current=$(crontab -l 2>/dev/null || true)
+  if [[ -n "$current" ]] && echo "$current" | grep -q "$pattern"; then
+    echo "$current" | grep -v "$pattern" | crontab -
+    log_info "Removed cron entry matching: $pattern"
+  fi
+}
+
+purge_packages() {
+  local distro
+  distro=$(get_distro)
+
+  case "$distro" in
+    debian|ubuntu)
+      DEBIAN_FRONTEND=noninteractive apt-get remove -y 3proxy wireguard wireguard-tools modemmanager usb-modeswitch 2>/dev/null || true
+      DEBIAN_FRONTEND=noninteractive apt-get autoremove -y 2>/dev/null || true
+      ;;
+    centos|rhel|fedora)
+      if command_exists dnf; then
+        dnf remove -y 3proxy wireguard-tools ModemManager usb_modeswitch 2>/dev/null || true
+      elif command_exists yum; then
+        yum remove -y 3proxy wireguard-tools ModemManager usb_modeswitch 2>/dev/null || true
+      fi
+      ;;
+    *)
+      log_warn "Package purge not implemented for distro: $distro"
+      ;;
+  esac
+}
+
+main() {
+  require_root
+  parse_args "$@"
+
+  log_info "╔════════════════════════════════════════════════════════════╗"
+  log_info "║                 Partner Node Uninstall                   ║"
+  log_info "╚════════════════════════════════════════════════════════════╝"
+
+  stop_and_disable_service "$SERVICE_NAME"
+  stop_and_disable_service "$UI_SERVICE_NAME"
+  stop_and_disable_service "partner-node-self-update"
+  stop_and_disable_service "disable-modem"
+
+  pkill -9 -f "/usr/local/bin/node-agent -config /etc/partner-node/config.yaml" 2>/dev/null || true
+  pkill -9 -f "/usr/local/bin/node-agent" 2>/dev/null || true
+  pkill -9 -f "/opt/partner-node-ui/server.py" 2>/dev/null || true
+
+  remove_cron_entry "enforce-wifi-routing"
+
+  remove_if_exists "/etc/systemd/system/${SERVICE_NAME}.service"
+  remove_if_exists "/etc/systemd/system/${UI_SERVICE_NAME}.service"
+  remove_if_exists "/etc/systemd/system/partner-node-self-update.service"
+  remove_if_exists "/etc/systemd/system/partner-node-self-update.timer"
+  remove_if_exists "/etc/systemd/system/disable-modem.service"
+
+  systemctl daemon-reload || true
+
+  remove_if_exists "/usr/local/bin/node-agent"
+  remove_if_exists "/usr/local/bin/node-agent-wrapper.sh"
+  remove_if_exists "/usr/local/bin/doctor"
+  remove_if_exists "/usr/local/bin/enforce-wifi-routing.sh"
+  remove_if_exists "/usr/local/bin/auto-modem-setup.sh"
+  remove_if_exists "/usr/local/sbin/partner-node-self-update.sh"
+  remove_if_exists "/usr/local/sbin/partner-node-flash-e3372h.sh"
+
+  remove_if_exists "/etc/partner-node"
+  remove_if_exists "/var/lib/partner-node"
+  remove_if_exists "/var/log/partner-node"
+  remove_if_exists "/opt/partner-node-ui"
+  remove_if_exists "/opt/partner-node-flash"
+
+  remove_if_exists "/etc/netplan/90-auto-modem-dhcp.yaml"
+  remove_if_exists "/etc/netplan/99-modem-disable.yaml"
+  remove_if_exists "/etc/cron.hourly/partner-node-fs-health"
+  remove_if_exists "/var/log/modem-routing.log"
+
+  if [[ "$KEEP_PROXY_CONFIG" != "true" ]]; then
+    remove_if_exists "/etc/3proxy/3proxy.conf"
+  fi
+
+  if [[ "$PURGE_PACKAGES" == "true" ]]; then
+    log_info "Purging related packages"
+    purge_packages
+  else
+    log_info "Keeping system packages (3proxy, wireguard, modemmanager)"
+  fi
+
+  if command_exists netplan; then
+    netplan apply 2>/dev/null || true
+  fi
+
+  log_info ""
+  log_info "Partner node removed"
+  log_info "Next install command can be run on a clean host state"
+}
+
+main "$@"
