@@ -59,6 +59,7 @@ User=root
 ExecStart=$INSTALL_PREFIX/node-agent-wrapper.sh -config $CONFIG_DIR/config.yaml
 Restart=always
 RestartSec=5
+TimeoutStopSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=partner-node
@@ -69,6 +70,7 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes
+ReadWritePaths=$CONFIG_DIR $DATA_DIR $LOG_DIR /etc/3proxy /var/log/3proxy
 LimitNOFILE=65536
 LimitNPROC=512
 
