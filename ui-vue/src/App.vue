@@ -7,6 +7,7 @@ import {
   Gauge,
   HardDrive,
   Network,
+  Play,
   RefreshCcw,
   Router,
   Server,
@@ -39,6 +40,9 @@ const extraParams = ref("")
 const selectedNode = ref("all")
 const selectedModem = ref("all")
 const eventFeed = ref([])
+const localSpeedTest = ref(null)
+const localSpeedTestLoading = ref(false)
+const localSpeedTestError = ref("")
 
 let ws = null
 let wsUrl = ""
@@ -191,6 +195,32 @@ async function sendCommand(type = commandType.value, targetMessage = "command") 
   }
 }
 
+async function runLocalSpeedTest() {
+  if (selectedModem.value === "all") {
+    localSpeedTestError.value = "Choose a modem first."
+    return
+  }
+  localSpeedTestLoading.value = true
+  localSpeedTestError.value = ""
+  try {
+    const response = await fetch("/api/speedtest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        node_id: activeNodeId.value,
+        modem_id: selectedModem.value,
+        bytes: 8_000_000,
+      }),
+    })
+    if (!response.ok) throw new Error(await response.text())
+    localSpeedTest.value = await response.json()
+  } catch (error) {
+    localSpeedTestError.value = error instanceof Error ? error.message : "local speed test failed"
+  } finally {
+    localSpeedTestLoading.value = false
+  }
+}
+
 function quickAction(type) { sendCommand(type, "quick") }
 watch(selectedNode, () => { if (!filteredModems.value.some((item) => item.id === selectedModem.value)) selectedModem.value = "all" })
 onMounted(() => { loadOverview(); fallbackTimer = window.setInterval(() => { if (realtimeState.value !== "active") loadOverview(false) }, 15000) })
@@ -257,7 +287,7 @@ onBeforeUnmount(() => { closeRealtime(); clearRefreshTimer(); if (fallbackTimer)
         <TabsContent value="modems" class="space-y-4">
           <div class="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
             <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><CardTitle class="text-2xl">Modem fleet</CardTitle><CardDescription>Observed egress IP, technology, signal, sessions, and traffic for each partner modem.</CardDescription></CardHeader><CardContent class="p-4 sm:p-6"><div class="overflow-hidden rounded-[24px] border border-border/70"><Table><TableHeader><TableRow class="hover:bg-transparent"><TableHead>Node / Modem</TableHead><TableHead>Status</TableHead><TableHead>Observed IP</TableHead><TableHead>Operator</TableHead><TableHead>Tech</TableHead><TableHead>Signal</TableHead><TableHead>Sessions</TableHead><TableHead>Traffic</TableHead></TableRow></TableHeader><TableBody><TableRow v-for="modem in modems" :key="`${modem.node_id}:${modem.id}`"><TableCell><div class="font-medium">{{ modem.id }}</div><div class="text-xs text-muted-foreground">{{ modem.node_id }} • port {{ modem.port || "-" }}</div></TableCell><TableCell><Badge :variant="tone(modem.state)" class="rounded-full capitalize">{{ modem.state || "unknown" }}</Badge></TableCell><TableCell class="font-mono text-xs">{{ modem.wan_ip || "-" }}</TableCell><TableCell>{{ modem.operator || "-" }}</TableCell><TableCell>{{ modem.technology || "-" }}</TableCell><TableCell><div class="flex items-center gap-2"><Signal class="h-4 w-4 text-muted-foreground" /><span>{{ modem.signal_strength ?? "-" }}</span></div></TableCell><TableCell>{{ modem.active_sessions || 0 }}</TableCell><TableCell class="text-xs text-muted-foreground"><div>In: {{ bytesLabel(modem.traffic_bytes_in) }}</div><div>Out: {{ bytesLabel(modem.traffic_bytes_out) }}</div></TableCell></TableRow><TableRow v-if="!modems.length"><TableCell colspan="8" class="py-10 text-center text-muted-foreground">No modems have been discovered yet.</TableCell></TableRow></TableBody></Table></div></CardContent></Card>
-            <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><CardTitle class="text-2xl">Fleet summary</CardTitle><CardDescription>A quick health layer without opening the main admin.</CardDescription></CardHeader><CardContent class="space-y-3 p-4 sm:p-6"><div class="rounded-2xl border border-border/70 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Ready modems</div><div class="mt-2 text-2xl font-semibold">{{ summary.modems_ready || 0 }}</div></div><div class="rounded-2xl border border-border/70 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Node observed IP</div><div class="mt-2 font-mono text-sm">{{ overview?.external_ip || "-" }}</div></div><div class="rounded-2xl border border-border/70 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Last heartbeat</div><div class="mt-2 text-sm font-medium">{{ relativeTime(overview?.last_heartbeat_at) }}</div></div><div class="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100"><div class="flex items-center gap-2 font-medium text-amber-200"><TriangleAlert class="h-4 w-4" />Important check</div><div class="mt-2 leading-6">If a modem observed IP does not match what a client sees through the proxy, the issue is in local egress or policy routing, not in the main server.</div></div></CardContent></Card>
+            <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><CardTitle class="text-2xl">Fleet summary</CardTitle><CardDescription>A quick health layer without opening the main admin.</CardDescription></CardHeader><CardContent class="space-y-3 p-4 sm:p-6"><div class="rounded-2xl border border-border/70 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Ready modems</div><div class="mt-2 text-2xl font-semibold">{{ summary.modems_ready || 0 }}</div></div><div class="rounded-2xl border border-border/70 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Node observed IP</div><div class="mt-2 font-mono text-sm">{{ overview?.external_ip || "-" }}</div></div><div class="rounded-2xl border border-border/70 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Last heartbeat</div><div class="mt-2 text-sm font-medium">{{ relativeTime(overview?.last_heartbeat_at) }}</div></div><div class="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100"><div class="flex items-center gap-2 font-medium text-amber-200"><TriangleAlert class="h-4 w-4" />Important check</div><div class="mt-2 leading-6">If a modem observed IP does not match what a client sees through the proxy, the issue is in local egress or policy routing, not in the main server.</div></div><div class="rounded-2xl border border-border/70 p-4 space-y-3"><div class="flex items-center justify-between gap-3"><div><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Local modem speed test</div><div class="mt-1 text-sm text-muted-foreground">Runs directly on the node through the selected modem port.</div></div><Button variant="outline" class="rounded-full" :disabled="localSpeedTestLoading || selectedModem === 'all'" @click="runLocalSpeedTest()"><Play class="mr-2 h-4 w-4" />{{ localSpeedTestLoading ? "Testing..." : "Run test" }}</Button></div><div class="text-xs text-muted-foreground">Select a modem in the command center first, then run the test here.</div><div v-if="localSpeedTestError" class="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{{ localSpeedTestError }}</div><div v-if="localSpeedTest" class="rounded-xl border border-border/70 bg-muted/40 p-3 text-sm space-y-2"><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Download</span><span class="font-semibold">{{ localSpeedTest.download_mbps }} Mbps</span></div><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Transferred</span><span>{{ bytesLabel(localSpeedTest.bytes_received) }}</span></div><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Duration</span><span>{{ localSpeedTest.duration_ms }} ms</span></div><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Remote IP</span><span class="font-mono text-xs">{{ localSpeedTest.remote_ip || "-" }}</span></div></div></div></CardContent></Card>
           </div>
         </TabsContent>
 
@@ -271,7 +301,7 @@ onBeforeUnmount(() => { closeRealtime(); clearRefreshTimer(); if (fallbackTimer)
               <CardContent class="space-y-4 p-4 sm:p-6">
                 <div class="grid gap-4 md:grid-cols-2">
                   <div class="space-y-2">
-                    <Label for="node-select">Target node</Label>
+                    <div class="text-sm font-medium">Target node</div>
                     <Select v-model="selectedNode">
                       <SelectTrigger id="node-select" class="rounded-2xl"><SelectValue placeholder="Choose node" /></SelectTrigger>
                       <SelectContent>
@@ -281,7 +311,7 @@ onBeforeUnmount(() => { closeRealtime(); clearRefreshTimer(); if (fallbackTimer)
                     </Select>
                   </div>
                   <div class="space-y-2">
-                    <Label for="modem-select">Target modem</Label>
+                    <div class="text-sm font-medium">Target modem</div>
                     <Select v-model="selectedModem">
                       <SelectTrigger id="modem-select" class="rounded-2xl"><SelectValue placeholder="Choose modem" /></SelectTrigger>
                       <SelectContent>
@@ -294,7 +324,7 @@ onBeforeUnmount(() => { closeRealtime(); clearRefreshTimer(); if (fallbackTimer)
 
                 <div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_140px]">
                   <div class="space-y-2">
-                    <Label for="command-type">Command</Label>
+                    <div class="text-sm font-medium">Command</div>
                     <Select v-model="commandType">
                       <SelectTrigger id="command-type" class="rounded-2xl"><SelectValue placeholder="Choose command" /></SelectTrigger>
                       <SelectContent>
@@ -303,13 +333,13 @@ onBeforeUnmount(() => { closeRealtime(); clearRefreshTimer(); if (fallbackTimer)
                     </Select>
                   </div>
                   <div class="space-y-2">
-                    <Label for="timeout-sec">Timeout, sec</Label>
+                    <div class="text-sm font-medium">Timeout, sec</div>
                     <Input id="timeout-sec" v-model="timeoutSec" class="rounded-2xl" type="number" min="10" />
                   </div>
                 </div>
 
                 <div class="space-y-2">
-                  <Label for="extra-params">Extra JSON params</Label>
+                  <div class="text-sm font-medium">Extra JSON params</div>
                   <Textarea id="extra-params" v-model="extraParams" class="min-h-[120px] rounded-[24px] font-mono text-xs" placeholder='{"force": true}' />
                 </div>
 

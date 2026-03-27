@@ -31,6 +31,8 @@ cat > "${UI_DIR}/server.py" <<'PY'
 import json
 import mimetypes
 import os
+import subprocess
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -41,6 +43,8 @@ PARTNER_KEY = os.environ.get("PARTNER_KEY", "")
 LISTEN_ADDR = os.environ.get("UI_LISTEN_ADDR", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("UI_PORT", "19090"))
 ROOT_DIR = os.path.dirname(__file__)
+SPEEDTEST_URL = os.environ.get("PARTNER_SPEEDTEST_URL", "http://speed.cloudflare.com/__down")
+SPEEDTEST_BYTES = int(os.environ.get("PARTNER_SPEEDTEST_BYTES", "8000000"))
 
 ALLOWED = {
     "self_check",
@@ -60,6 +64,73 @@ def json_request(url, method="GET", payload=None):
     req = urllib.request.Request(url, method=method, data=body, headers=headers)
     with urllib.request.urlopen(req, timeout=25) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def perform_local_speedtest(node_id, modem_id, bytes_count):
+    qs = urllib.parse.urlencode({"partner_key": PARTNER_KEY})
+    overview = json_request(f"{MAIN_SERVER}/api/partner/overview?{qs}")
+    modems = overview.get("modems", []) if isinstance(overview, dict) else []
+    chosen = None
+    for modem in modems:
+        if str(modem.get("id", "")).strip() != modem_id:
+            continue
+        if node_id and str(modem.get("node_id", "")).strip() != node_id:
+            continue
+        chosen = modem
+        break
+    if not chosen:
+        raise RuntimeError("modem not found")
+
+    proxy_port = int(chosen.get("port") or 0)
+    if proxy_port <= 0:
+        raise RuntimeError("modem port is not available")
+
+    target_url = f"{SPEEDTEST_URL}?bytes={int(bytes_count)}"
+    started = time.time()
+    result = subprocess.run(
+        [
+            "curl",
+            "--silent",
+            "--show-error",
+            "--output",
+            "/dev/null",
+            "--proxy",
+            f"socks5h://127.0.0.1:{proxy_port}",
+            "--connect-timeout",
+            "10",
+            "--max-time",
+            "40",
+            "--write-out",
+            '{"speed_download":%{speed_download},"time_total":%{time_total},"size_download":%{size_download},"remote_ip":"%{remote_ip}","url_effective":"%{url_effective}"}',
+            target_url,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout or "speedtest failed").strip())
+
+    payload = json.loads((result.stdout or "").strip() or "{}")
+    speed_download = float(payload.get("speed_download") or 0.0)
+    time_total = float(payload.get("time_total") or 0.0)
+    size_download = int(float(payload.get("size_download") or 0))
+    mbps = round((speed_download * 8) / 1_000_000, 2) if speed_download > 0 else 0.0
+    return {
+        "mode": "local_modem",
+        "node_id": str(chosen.get("node_id") or ""),
+        "modem_id": str(chosen.get("id") or ""),
+        "proxy_host": "127.0.0.1",
+        "proxy_port": proxy_port,
+        "target_url": payload.get("url_effective") or target_url,
+        "remote_ip": payload.get("remote_ip") or "",
+        "bytes_requested": int(bytes_count),
+        "bytes_received": size_download,
+        "duration_ms": int(time_total * 1000),
+        "download_mbps": mbps,
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(started)),
+        "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -113,6 +184,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_text(502, str(err))
             return
 
+        if self.path.startswith("/api/speedtest-template"):
+            self._send_json(200, {
+                "target_url": SPEEDTEST_URL,
+                "bytes_default": SPEEDTEST_BYTES,
+            })
+            return
+
         if self.path.startswith("/assets/"):
             target = os.path.join(ROOT_DIR, self.path.lstrip("/"))
             self._serve_file(target)
@@ -125,6 +203,25 @@ class Handler(BaseHTTPRequestHandler):
         self._serve_file(os.path.join(ROOT_DIR, "index.html"))
 
     def do_POST(self):
+        if self.path == "/api/speedtest":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(length) if length > 0 else b"{}"
+                req = json.loads(raw.decode("utf-8"))
+                modem_id = str(req.get("modem_id", "")).strip()
+                node_id = str(req.get("node_id", "")).strip()
+                bytes_count = int(req.get("bytes") or SPEEDTEST_BYTES)
+                if not modem_id:
+                    self._send_text(400, "modem_id is required")
+                    return
+                data = perform_local_speedtest(node_id, modem_id, bytes_count)
+                self._send_json(200, data)
+            except urllib.error.HTTPError as err:
+                self._send_text(err.code, err.read().decode("utf-8", errors="ignore"))
+            except Exception as err:
+                self._send_text(400, str(err))
+            return
+
         if self.path != "/api/command":
             self._send_text(404, "not found")
             return
