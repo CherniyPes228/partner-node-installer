@@ -198,6 +198,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_text(502, str(err))
             return
 
+        if self.path.startswith("/api/modem-billing"):
+            try:
+                qs = urllib.parse.urlencode({"partner_key": PARTNER_KEY})
+                data = json_request(f"{MAIN_SERVER}/api/partner/modem-billing?{qs}")
+                self._send_json(200, data)
+            except urllib.error.HTTPError as err:
+                self._send_text(err.code, err.read().decode("utf-8", errors="ignore"))
+            except Exception as err:
+                self._send_text(502, str(err))
+            return
+
         if self.path.startswith("/api/speedtest-template"):
             self._send_json(200, {
                 "target_url": SPEEDTEST_URL,
@@ -230,6 +241,20 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_text(400, "modem_id is required")
                     return
                 data = perform_local_speedtest(node_id, modem_id, bytes_count, target_url)
+                self._send_json(200, data)
+            except urllib.error.HTTPError as err:
+                self._send_text(err.code, err.read().decode("utf-8", errors="ignore"))
+            except Exception as err:
+                self._send_text(400, str(err))
+            return
+
+        if self.path == "/api/modem-billing":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(length) if length > 0 else b"{}"
+                req = json.loads(raw.decode("utf-8"))
+                req["partner_key"] = PARTNER_KEY
+                data = json_request(f"{MAIN_SERVER}/api/partner/modem-billing", method="POST", payload=req)
                 self._send_json(200, data)
             except urllib.error.HTTPError as err:
                 self._send_text(err.code, err.read().decode("utf-8", errors="ignore"))

@@ -43,6 +43,9 @@ const eventFeed = ref([])
 const localSpeedTest = ref(null)
 const localSpeedTestLoading = ref(false)
 const localSpeedTestError = ref("")
+const modemBilling = ref([])
+const billingMessage = ref("")
+const billingSaving = ref("")
 const speedTestTarget = ref("http://speedtest.tele2.net/1MB.zip")
 const speedTestCustomUrl = ref("")
 const speedTestTargets = [
@@ -80,6 +83,12 @@ const summary = computed(() => overview.value?.summary || {})
 const nodes = computed(() => Array.isArray(overview.value?.nodes) ? overview.value.nodes : [])
 const modems = computed(() => Array.isArray(overview.value?.modems) ? overview.value.modems : [])
 const commandHistory = computed(() => Array.isArray(overview.value?.last_results) ? overview.value.last_results : [])
+const partnerBalance = computed(() => overview.value?.partner_balance || {})
+const billingByKey = computed(() => {
+  const map = {}
+  for (const item of modemBilling.value) map[`${item.node_id}:${item.modem_id}`] = item
+  return map
+})
 const activeNodeId = computed(() => selectedNode.value !== "all" ? selectedNode.value : (nodes.value[0]?.node_id || ""))
 const filteredModems = computed(() => selectedNode.value === "all" ? modems.value : modems.value.filter((item) => item.node_id === selectedNode.value))
 const lastResults = computed(() => commandHistory.value.slice(0, 12))
@@ -171,6 +180,7 @@ async function loadOverview(showLoader = true) {
     if (!response.ok) throw new Error(await response.text())
     const data = await response.json()
     overview.value = data
+    await loadModemBilling()
     if (selectedNode.value === "all" && data.nodes?.length === 1) selectedNode.value = data.nodes[0].node_id
     if (selectedNode.value !== "all" && !data.nodes?.some((item) => item.node_id === selectedNode.value)) selectedNode.value = data.nodes?.[0]?.node_id || "all"
     if (selectedModem.value !== "all" && !filteredModems.value.some((item) => item.id === selectedModem.value)) selectedModem.value = "all"
@@ -178,6 +188,17 @@ async function loadOverview(showLoader = true) {
   } catch (error) {
     refreshError.value = error instanceof Error ? error.message : "refresh failed"
   } finally { loading.value = false }
+}
+
+async function loadModemBilling() {
+  try {
+    const response = await fetch("/api/modem-billing", { cache: "no-store" })
+    if (!response.ok) throw new Error(await response.text())
+    const data = await response.json()
+    modemBilling.value = Array.isArray(data.modems) ? data.modems : []
+  } catch (error) {
+    billingMessage.value = error instanceof Error ? error.message : "billing refresh failed"
+  }
 }
 
 function buildCommandPayload(type) {
@@ -235,6 +256,63 @@ async function runLocalSpeedTest() {
   }
 }
 
+async function saveBilling(modem) {
+  billingSaving.value = `${modem.node_id}:${modem.modem_id}`
+  billingMessage.value = ""
+  try {
+    const payload = {
+      node_id: modem.node_id,
+      modem_id: modem.modem_id,
+      plan_kind: modem.plan_kind || "metered",
+      traffic_limit_gb: modem.plan_kind === "unlimited" || modem.traffic_limit_gb === "" || modem.traffic_limit_gb == null ? null : Number(modem.traffic_limit_gb),
+      auto_reset_day: modem.auto_reset_day === "" || modem.auto_reset_day == null ? null : Number(modem.auto_reset_day),
+      notes: modem.notes || "",
+    }
+    const response = await fetch("/api/modem-billing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+    if (!response.ok) throw new Error(await response.text())
+    const data = await response.json()
+    modemBilling.value = Array.isArray(data.modems) ? data.modems : modemBilling.value
+    billingMessage.value = `saved ${modem.modem_id}`
+  } catch (error) {
+    billingMessage.value = error instanceof Error ? error.message : "billing save failed"
+  } finally {
+    billingSaving.value = ""
+  }
+}
+
+async function resetBilling(modem) {
+  billingSaving.value = `${modem.node_id}:${modem.modem_id}`
+  billingMessage.value = ""
+  try {
+    const payload = {
+      node_id: modem.node_id,
+      modem_id: modem.modem_id,
+      plan_kind: modem.plan_kind || "metered",
+      traffic_limit_gb: modem.plan_kind === "unlimited" || modem.traffic_limit_gb === "" || modem.traffic_limit_gb == null ? null : Number(modem.traffic_limit_gb),
+      auto_reset_day: modem.auto_reset_day === "" || modem.auto_reset_day == null ? null : Number(modem.auto_reset_day),
+      notes: modem.notes || "",
+      manual_reset: true,
+    }
+    const response = await fetch("/api/modem-billing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+    if (!response.ok) throw new Error(await response.text())
+    const data = await response.json()
+    modemBilling.value = Array.isArray(data.modems) ? data.modems : modemBilling.value
+    billingMessage.value = `reset ${modem.modem_id}`
+  } catch (error) {
+    billingMessage.value = error instanceof Error ? error.message : "billing reset failed"
+  } finally {
+    billingSaving.value = ""
+  }
+}
+
 function quickAction(type) { sendCommand(type, "quick") }
 watch(selectedNode, () => { if (!filteredModems.value.some((item) => item.id === selectedModem.value)) selectedModem.value = "all" })
 onMounted(() => { loadOverview(); fallbackTimer = window.setInterval(() => { if (realtimeState.value !== "active") loadOverview(false) }, 15000) })
@@ -264,13 +342,14 @@ onBeforeUnmount(() => { closeRealtime(); clearRefreshTimer(); if (fallbackTimer)
         </div>
       </header>
 
-      <div class="grid gap-4 xl:grid-cols-6">
+      <div class="grid gap-4 xl:grid-cols-7">
         <Card class="rounded-[28px] border-border/70 shadow-sm xl:col-span-1"><CardHeader class="pb-3"><CardDescription class="flex items-center gap-2"><Server class="h-4 w-4" /> Nodes</CardDescription><CardTitle class="text-2xl">{{ summary.nodes_online || 0 }} / {{ summary.nodes_total || 0 }}</CardTitle></CardHeader><CardContent class="text-sm text-muted-foreground">Currently online, degraded/offline: <span class="font-medium text-foreground">{{ summary.nodes_degraded || 0 }}</span></CardContent></Card>
         <Card class="rounded-[28px] border-border/70 shadow-sm xl:col-span-1"><CardHeader class="pb-3"><CardDescription class="flex items-center gap-2"><HardDrive class="h-4 w-4" /> Modems</CardDescription><CardTitle class="text-2xl">{{ summary.modems_ready || 0 }} / {{ summary.modems_total || 0 }}</CardTitle></CardHeader><CardContent class="text-sm text-muted-foreground">Ready modems currently in the pool.</CardContent></Card>
         <Card class="rounded-[28px] border-border/70 shadow-sm xl:col-span-1"><CardHeader class="pb-3"><CardDescription class="flex items-center gap-2"><Users class="h-4 w-4" /> Clients</CardDescription><CardTitle class="text-2xl">{{ summary.active_clients || 0 }}</CardTitle></CardHeader><CardContent class="text-sm text-muted-foreground">Active leases through the main server for this partner fleet.</CardContent></Card>
         <Card class="rounded-[28px] border-border/70 shadow-sm xl:col-span-1"><CardHeader class="pb-3"><CardDescription class="flex items-center gap-2"><Activity class="h-4 w-4" /> Sessions</CardDescription><CardTitle class="text-2xl">{{ summary.active_sessions || 0 }}</CardTitle></CardHeader><CardContent class="text-sm text-muted-foreground">Aggregate load across all partner modems.</CardContent></Card>
         <Card class="rounded-[28px] border-border/70 shadow-sm xl:col-span-1"><CardHeader class="pb-3"><CardDescription class="flex items-center gap-2"><Waves class="h-4 w-4" /> Traffic In</CardDescription><CardTitle class="text-2xl">{{ bytesLabel(summary.traffic_in_total) }}</CardTitle></CardHeader><CardContent class="text-sm text-muted-foreground">Inbound traffic from aggregated heartbeat data.</CardContent></Card>
         <Card class="rounded-[28px] border-border/70 shadow-sm xl:col-span-1"><CardHeader class="pb-3"><CardDescription class="flex items-center gap-2"><Gauge class="h-4 w-4" /> Traffic Out</CardDescription><CardTitle class="text-2xl">{{ bytesLabel(summary.traffic_out_total) }}</CardTitle></CardHeader><CardContent class="flex items-center justify-between gap-3 text-sm text-muted-foreground"><span>{{ loading ? "refresh..." : "snapshot synced" }}</span><Button variant="outline" size="sm" class="rounded-full" @click="loadOverview()"><RefreshCcw class="h-4 w-4" />Refresh</Button></CardContent></Card>
+        <Card class="rounded-[28px] border-border/70 shadow-sm xl:col-span-1"><CardHeader class="pb-3"><CardDescription class="flex items-center gap-2"><BadgeCheck class="h-4 w-4" /> Balance</CardDescription><CardTitle class="text-2xl">${{ Number(partnerBalance.balance_usd || 0).toFixed(2) }}</CardTitle></CardHeader><CardContent class="text-sm text-muted-foreground">Daily accrual balance for this partner.</CardContent></Card>
       </div>
 
       <div v-if="refreshError" class="rounded-[24px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{{ refreshError }}</div>
@@ -299,9 +378,10 @@ onBeforeUnmount(() => { closeRealtime(); clearRefreshTimer(); if (fallbackTimer)
         </TabsContent>
 
         <TabsContent value="modems" class="space-y-4">
-          <div class="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_minmax(360px,0.65fr)]">
-            <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><CardTitle class="text-2xl">Modem fleet</CardTitle><CardDescription>Observed egress IP, technology, signal, sessions, and traffic for each partner modem.</CardDescription></CardHeader><CardContent class="p-4 sm:p-6"><div class="overflow-hidden rounded-[24px] border border-border/70"><Table><TableHeader><TableRow class="hover:bg-transparent"><TableHead>Node / Modem</TableHead><TableHead>Status</TableHead><TableHead>Observed IP</TableHead><TableHead>Operator</TableHead><TableHead>Tech</TableHead><TableHead>Signal</TableHead><TableHead>Sessions</TableHead><TableHead>Traffic</TableHead></TableRow></TableHeader><TableBody><TableRow v-for="modem in modems" :key="`${modem.node_id}:${modem.id}`"><TableCell><div class="font-medium">{{ modem.id }}</div><div class="text-xs text-muted-foreground">{{ modem.node_id }} • port {{ modem.port || "-" }}</div></TableCell><TableCell><Badge :variant="tone(modem.state)" class="rounded-full capitalize">{{ modem.state || "unknown" }}</Badge></TableCell><TableCell class="font-mono text-xs">{{ modem.wan_ip || "-" }}</TableCell><TableCell>{{ modem.operator || "-" }}</TableCell><TableCell>{{ modem.technology || "-" }}</TableCell><TableCell><div class="flex items-center gap-2"><Signal class="h-4 w-4 text-muted-foreground" /><span>{{ modem.signal_strength ?? "-" }}</span></div></TableCell><TableCell>{{ modem.active_sessions || 0 }}</TableCell><TableCell class="text-xs text-muted-foreground"><div>In: {{ bytesLabel(modem.traffic_bytes_in) }}</div><div>Out: {{ bytesLabel(modem.traffic_bytes_out) }}</div></TableCell></TableRow><TableRow v-if="!modems.length"><TableCell colspan="8" class="py-10 text-center text-muted-foreground">No modems have been discovered yet.</TableCell></TableRow></TableBody></Table></div></CardContent></Card>
-            <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><CardTitle class="text-2xl">Fleet summary</CardTitle><CardDescription>A quick health layer without opening the main admin.</CardDescription></CardHeader><CardContent class="space-y-3 p-4 sm:p-6"><div class="rounded-2xl border border-border/70 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Ready modems</div><div class="mt-2 text-2xl font-semibold">{{ summary.modems_ready || 0 }}</div></div><div class="rounded-2xl border border-border/70 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Node observed IP</div><div class="mt-2 font-mono text-sm">{{ overview?.external_ip || "-" }}</div></div><div class="rounded-2xl border border-border/70 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Last heartbeat</div><div class="mt-2 text-sm font-medium">{{ relativeTime(overview?.last_heartbeat_at) }}</div></div><div class="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100"><div class="flex items-center gap-2 font-medium text-amber-200"><TriangleAlert class="h-4 w-4" />Important check</div><div class="mt-2 leading-6">If a modem observed IP does not match what a client sees through the proxy, the issue is in local egress or policy routing, not in the main server.</div></div><div class="rounded-2xl border border-border/70 p-4 space-y-3"><div class="flex items-center justify-between gap-3"><div><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Local modem speed test</div><div class="mt-1 text-sm text-muted-foreground">Runs directly on the node through the selected modem port. You can choose any endpoint or enter a custom URL.</div></div><Button variant="outline" class="rounded-full" :disabled="localSpeedTestLoading || selectedModem === 'all'" @click="runLocalSpeedTest()"><Play class="mr-2 h-4 w-4" />{{ localSpeedTestLoading ? "Testing..." : "Run test" }}</Button></div><div class="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)]"><div class="space-y-2"><div class="text-sm font-medium">Service</div><Select v-model="speedTestTarget"><SelectTrigger class="rounded-2xl"><SelectValue placeholder="Choose service" /></SelectTrigger><SelectContent><SelectItem v-for="item in speedTestTargets" :key="item.value" :value="item.value">{{ item.label }}</SelectItem></SelectContent></Select></div><div v-if="speedTestTarget === 'custom'" class="space-y-2"><div class="text-sm font-medium">Custom URL</div><Input v-model="speedTestCustomUrl" class="rounded-2xl" placeholder="https://example.com/test.bin" /></div></div><div class="text-xs text-muted-foreground">Select a modem in the command center first. For Cloudflare-style endpoints the `bytes` query is added automatically if needed.</div><div v-if="localSpeedTestError" class="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{{ localSpeedTestError }}</div><div v-if="localSpeedTest" class="rounded-xl border border-border/70 bg-muted/40 p-3 text-sm space-y-2"><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Download</span><span class="font-semibold">{{ localSpeedTest.download_mbps }} Mbps</span></div><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Transferred</span><span>{{ bytesLabel(localSpeedTest.bytes_received) }}</span></div><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Duration</span><span>{{ localSpeedTest.duration_ms }} ms</span></div><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Remote IP</span><span class="font-mono text-xs">{{ localSpeedTest.remote_ip || "-" }}</span></div><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">URL</span><span class="max-w-[220px] truncate text-right font-mono text-xs">{{ localSpeedTest.target_url || "-" }}</span></div></div></div></CardContent></Card>
+          <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><CardTitle class="text-2xl">Modem fleet</CardTitle><CardDescription>Observed egress IP, technology, signal, sessions, traffic, and current SIM package usage.</CardDescription></CardHeader><CardContent class="p-4 sm:p-6"><div class="overflow-hidden rounded-[24px] border border-border/70"><Table><TableHeader><TableRow class="hover:bg-transparent"><TableHead>Node / Modem</TableHead><TableHead>Status</TableHead><TableHead>Observed IP</TableHead><TableHead>Operator</TableHead><TableHead>Tech</TableHead><TableHead>Signal</TableHead><TableHead>Sessions</TableHead><TableHead>Traffic</TableHead><TableHead>Plan</TableHead></TableRow></TableHeader><TableBody><TableRow v-for="modem in modems" :key="`${modem.node_id}:${modem.id}`"><TableCell><div class="font-medium">{{ modem.id }}</div><div class="text-xs text-muted-foreground">{{ modem.node_id }} • port {{ modem.port || "-" }}</div></TableCell><TableCell><Badge :variant="tone(modem.state)" class="rounded-full capitalize">{{ modem.state || "unknown" }}</Badge></TableCell><TableCell class="font-mono text-xs">{{ modem.wan_ip || "-" }}</TableCell><TableCell>{{ modem.operator || "-" }}</TableCell><TableCell>{{ modem.technology || "-" }}</TableCell><TableCell><div class="flex items-center gap-2"><Signal class="h-4 w-4 text-muted-foreground" /><span>{{ modem.signal_strength ?? "-" }}</span></div></TableCell><TableCell>{{ modem.active_sessions || 0 }}</TableCell><TableCell class="text-xs text-muted-foreground"><div>In: {{ bytesLabel(modem.traffic_bytes_in) }}</div><div>Out: {{ bytesLabel(modem.traffic_bytes_out) }}</div></TableCell><TableCell class="text-xs text-muted-foreground"><template v-if="billingByKey[`${modem.node_id}:${modem.id}`]"><div>{{ billingByKey[`${modem.node_id}:${modem.id}`].plan_kind === 'unlimited' ? 'Unlimited' : `${billingByKey[`${modem.node_id}:${modem.id}`].traffic_limit_gb || '-'} GB` }}</div><div>Cycle: {{ bytesLabel(billingByKey[`${modem.node_id}:${modem.id}`].cycle_used_bytes) }}</div></template><span v-else>-</span></TableCell></TableRow><TableRow v-if="!modems.length"><TableCell colspan="9" class="py-10 text-center text-muted-foreground">No modems have been discovered yet.</TableCell></TableRow></TableBody></Table></div></CardContent></Card>
+          <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(400px,0.8fr)]">
+            <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><CardTitle class="text-2xl">SIM package controls</CardTitle><CardDescription>Per-modem traffic package, auto reset day, and manual reset of the current billing cycle.</CardDescription></CardHeader><CardContent class="space-y-4 p-4 sm:p-6"><div v-if="billingMessage" class="rounded-xl border border-border/70 bg-muted/50 px-3 py-2 text-sm">{{ billingMessage }}</div><div v-for="item in modemBilling" :key="`${item.node_id}:${item.modem_id}`" class="rounded-[24px] border border-border/70 p-4 space-y-3"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="font-medium">{{ item.modem_id }}</div><div class="text-xs text-muted-foreground">{{ item.node_id }} • cycle used {{ bytesLabel(item.cycle_used_bytes) }}<span v-if="item.next_reset_at"> • next reset {{ relativeTime(item.next_reset_at) }}</span></div></div><div class="text-right text-xs text-muted-foreground"><div>Started {{ relativeTime(item.cycle_start_at) }}</div><div v-if="item.remaining_bytes != null">Left {{ bytesLabel(item.remaining_bytes) }}</div></div></div><div class="grid gap-3 md:grid-cols-4"><div class="space-y-2"><div class="text-sm font-medium">Plan</div><Select v-model="item.plan_kind"><SelectTrigger class="rounded-2xl"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="metered">Metered</SelectItem><SelectItem value="unlimited">Unlimited</SelectItem></SelectContent></Select></div><div class="space-y-2"><div class="text-sm font-medium">Limit GB</div><Input v-model="item.traffic_limit_gb" :disabled="item.plan_kind === 'unlimited'" class="rounded-2xl" type="number" min="0" step="0.1" /></div><div class="space-y-2"><div class="text-sm font-medium">Auto reset day</div><Input v-model="item.auto_reset_day" class="rounded-2xl" type="number" min="1" max="28" placeholder="2" /></div><div class="space-y-2"><div class="text-sm font-medium">Notes</div><Input v-model="item.notes" class="rounded-2xl" placeholder="SIM tariff note" /></div></div><div class="flex flex-wrap gap-3"><Button class="rounded-full" :disabled="billingSaving === `${item.node_id}:${item.modem_id}`" @click="saveBilling(item)">{{ billingSaving === `${item.node_id}:${item.modem_id}` ? 'Saving...' : 'Save' }}</Button><Button variant="outline" class="rounded-full" :disabled="billingSaving === `${item.node_id}:${item.modem_id}`" @click="resetBilling(item)">Manual reset</Button></div></div><div v-if="!modemBilling.length" class="rounded-[24px] border border-dashed border-border/70 px-4 py-10 text-center text-sm text-muted-foreground">No modem billing data yet.</div></CardContent></Card>
+            <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><CardTitle class="text-2xl">Fleet summary</CardTitle><CardDescription>Health, speed, and local proxy diagnostics.</CardDescription></CardHeader><CardContent class="space-y-3 p-4 sm:p-6"><div class="rounded-2xl border border-border/70 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Ready modems</div><div class="mt-2 text-2xl font-semibold">{{ summary.modems_ready || 0 }}</div></div><div class="rounded-2xl border border-border/70 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Month accrual</div><div class="mt-2 text-2xl font-semibold">${{ Number(partnerBalance.current_month_earned_usd || 0).toFixed(2) }}</div></div><div class="rounded-2xl border border-border/70 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Last heartbeat</div><div class="mt-2 text-sm font-medium">{{ relativeTime(overview?.last_heartbeat_at) }}</div></div><div class="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100"><div class="flex items-center gap-2 font-medium text-amber-200"><TriangleAlert class="h-4 w-4" />Important check</div><div class="mt-2 leading-6">If a modem observed IP does not match what a client sees through the proxy, the issue is in local egress or policy routing, not in the main server.</div></div><div class="rounded-2xl border border-border/70 p-4 space-y-3"><div class="flex items-center justify-between gap-3"><div><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Local modem speed test</div><div class="mt-1 text-sm text-muted-foreground">Runs directly on the node through the selected modem port. You can choose any endpoint or enter a custom URL.</div></div><Button variant="outline" class="rounded-full" :disabled="localSpeedTestLoading || selectedModem === 'all'" @click="runLocalSpeedTest()"><Play class="mr-2 h-4 w-4" />{{ localSpeedTestLoading ? "Testing..." : "Run test" }}</Button></div><div class="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)]"><div class="space-y-2"><div class="text-sm font-medium">Service</div><Select v-model="speedTestTarget"><SelectTrigger class="rounded-2xl"><SelectValue placeholder="Choose service" /></SelectTrigger><SelectContent><SelectItem v-for="item in speedTestTargets" :key="item.value" :value="item.value">{{ item.label }}</SelectItem></SelectContent></Select></div><div v-if="speedTestTarget === 'custom'" class="space-y-2"><div class="text-sm font-medium">Custom URL</div><Input v-model="speedTestCustomUrl" class="rounded-2xl" placeholder="https://example.com/test.bin" /></div></div><div class="text-xs text-muted-foreground">Select a modem in the command center first. For Cloudflare-style endpoints the `bytes` query is added automatically if needed.</div><div v-if="localSpeedTestError" class="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{{ localSpeedTestError }}</div><div v-if="localSpeedTest" class="rounded-xl border border-border/70 bg-muted/40 p-3 text-sm space-y-2"><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Download</span><span class="font-semibold">{{ localSpeedTest.download_mbps }} Mbps</span></div><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Transferred</span><span>{{ bytesLabel(localSpeedTest.bytes_received) }}</span></div><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Duration</span><span>{{ localSpeedTest.duration_ms }} ms</span></div><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Remote IP</span><span class="font-mono text-xs">{{ localSpeedTest.remote_ip || "-" }}</span></div><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">URL</span><span class="max-w-[220px] truncate text-right font-mono text-xs">{{ localSpeedTest.target_url || "-" }}</span></div></div></div></CardContent></Card>
           </div>
         </TabsContent>
 
