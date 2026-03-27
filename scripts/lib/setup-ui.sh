@@ -138,6 +138,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             payload = {
                 "partner_key": PARTNER_KEY,
+                "node_id": str(req.get("node_id", "")).strip(),
                 "type": cmd_type,
                 "timeout_sec": int(req.get("timeout_sec", 120)),
                 "params": req.get("params", {}),

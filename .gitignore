@@ -9,3 +9,4 @@
 .env.local
 ui-vue/node_modules/
 ui-vue/.npm-cache/
+ui-vue/dist/
