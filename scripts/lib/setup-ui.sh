@@ -43,8 +43,8 @@ PARTNER_KEY = os.environ.get("PARTNER_KEY", "")
 LISTEN_ADDR = os.environ.get("UI_LISTEN_ADDR", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("UI_PORT", "19090"))
 ROOT_DIR = os.path.dirname(__file__)
-SPEEDTEST_URL = os.environ.get("PARTNER_SPEEDTEST_URL", "http://speed.cloudflare.com/__down")
-SPEEDTEST_BYTES = int(os.environ.get("PARTNER_SPEEDTEST_BYTES", "8000000"))
+SPEEDTEST_URL = os.environ.get("PARTNER_SPEEDTEST_URL", "http://speedtest.tele2.net/1MB.zip")
+SPEEDTEST_BYTES = int(os.environ.get("PARTNER_SPEEDTEST_BYTES", "2000000"))
 
 ALLOWED = {
     "self_check",
@@ -66,7 +66,21 @@ def json_request(url, method="GET", payload=None):
         return json.loads(resp.read().decode("utf-8"))
 
 
-def perform_local_speedtest(node_id, modem_id, bytes_count):
+def normalize_target_url(raw_url, bytes_count):
+    raw_url = str(raw_url or "").strip() or SPEEDTEST_URL
+    parsed = urllib.parse.urlparse(raw_url)
+    if parsed.scheme not in ("http", "https"):
+        raise RuntimeError("target_url must use http or https")
+    if not parsed.netloc:
+        raise RuntimeError("target_url host is required")
+    if parsed.netloc == "speed.cloudflare.com" and parsed.path == "/__down" and "bytes=" not in parsed.query:
+        query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+        query["bytes"] = [str(int(bytes_count))]
+        parsed = parsed._replace(query=urllib.parse.urlencode(query, doseq=True))
+    return urllib.parse.urlunparse(parsed)
+
+
+def perform_local_speedtest(node_id, modem_id, bytes_count, target_url):
     qs = urllib.parse.urlencode({"partner_key": PARTNER_KEY})
     overview = json_request(f"{MAIN_SERVER}/api/partner/overview?{qs}")
     modems = overview.get("modems", []) if isinstance(overview, dict) else []
@@ -85,7 +99,7 @@ def perform_local_speedtest(node_id, modem_id, bytes_count):
     if proxy_port <= 0:
         raise RuntimeError("modem port is not available")
 
-    target_url = f"{SPEEDTEST_URL}?bytes={int(bytes_count)}"
+    target_url = normalize_target_url(target_url, bytes_count)
     started = time.time()
     result = subprocess.run(
         [
@@ -211,10 +225,11 @@ class Handler(BaseHTTPRequestHandler):
                 modem_id = str(req.get("modem_id", "")).strip()
                 node_id = str(req.get("node_id", "")).strip()
                 bytes_count = int(req.get("bytes") or SPEEDTEST_BYTES)
+                target_url = str(req.get("target_url") or SPEEDTEST_URL).strip()
                 if not modem_id:
                     self._send_text(400, "modem_id is required")
                     return
-                data = perform_local_speedtest(node_id, modem_id, bytes_count)
+                data = perform_local_speedtest(node_id, modem_id, bytes_count, target_url)
                 self._send_json(200, data)
             except urllib.error.HTTPError as err:
                 self._send_text(err.code, err.read().decode("utf-8", errors="ignore"))
