@@ -179,25 +179,25 @@ main() {
     exit 1
   fi
 
-  log_info "Step 1/8: Installing system dependencies..."
+  log_info "Step 1/9: Installing system dependencies..."
   bash "$LIB_DIR/setup-dependencies.sh" || ((failed++))
 
-  log_info "Step 2/8: Setting up 3proxy..."
+  log_info "Step 2/9: Setting up 3proxy..."
   bash "$LIB_DIR/setup-3proxy.sh" || ((failed++))
 
-  log_info "Step 3/8: Downloading node-agent..."
+  log_info "Step 3/9: Downloading node-agent..."
   bash "$LIB_DIR/setup-node-agent.sh" || ((failed++))
 
-  log_info "Step 4/8: Creating configuration..."
+  log_info "Step 4/9: Creating configuration..."
   bash "$LIB_DIR/setup-config.sh" || ((failed++))
 
-  log_info "Step 5/8: Setting up systemd units..."
+  log_info "Step 5/9: Setting up systemd units..."
   bash "$LIB_DIR/setup-systemd.sh" || ((failed++))
 
-  log_info "Step 6/8: Configuring routing (WiFi primary, modem for proxy)..."
+  log_info "Step 6/9: Configuring routing (WiFi primary, modem for proxy)..."
   bash "$LIB_DIR/setup-routing.sh" || ((failed++))
 
-  log_info "Step 7/8: Configuring USB modem auto-DHCP..."
+  log_info "Step 7/9: Configuring USB modem auto-DHCP..."
   bash "$LIB_DIR/setup-modem-dhcp.sh" || ((failed++))
 
   log_info "Step 8/9: Setting up SSH support access..."

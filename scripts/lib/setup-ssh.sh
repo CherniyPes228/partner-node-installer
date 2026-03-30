@@ -9,6 +9,7 @@ SUPPORT_SSH_PUBLIC_KEY="${SUPPORT_SSH_PUBLIC_KEY:-}"
 SUPPORT_SSH_USER="${SUPPORT_SSH_USER:-}"
 SUPPORT_SUDOERS_FILE="/etc/sudoers.d/partner-node-support"
 SUPPORT_AUTH_MARKER="partner-node-support"
+SSHD_CONFIG="/etc/ssh/sshd_config"
 
 detect_support_user() {
   if [[ -n "$SUPPORT_SSH_USER" ]]; then
@@ -42,6 +43,25 @@ enable_ssh_service() {
   return 1
 }
 
+configure_sshd() {
+  if [[ ! -f "$SSHD_CONFIG" ]]; then
+    return 1
+  fi
+
+  sed -i 's/^#\?PubkeyAuthentication.*/PubkeyAuthentication yes/' "$SSHD_CONFIG" || true
+  sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' "$SSHD_CONFIG" || true
+  sed -i 's/^#\?KbdInteractiveAuthentication.*/KbdInteractiveAuthentication no/' "$SSHD_CONFIG" || true
+  sed -i 's/^#\?ChallengeResponseAuthentication.*/ChallengeResponseAuthentication no/' "$SSHD_CONFIG" || true
+  sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin no/' "$SSHD_CONFIG" || true
+  return 0
+}
+
+open_ssh_firewall() {
+  if command -v ufw >/dev/null 2>&1; then
+    ufw allow 22/tcp >/dev/null 2>&1 || true
+  fi
+}
+
 setup_ssh() {
   require_root
 
@@ -73,7 +93,7 @@ setup_ssh() {
   chown -R "$support_user:$support_user" "$home_dir/.ssh"
 
   if [[ -n "$SUPPORT_SSH_PUBLIC_KEY" ]] && ! grep -Fq "$SUPPORT_SSH_PUBLIC_KEY" "$home_dir/.ssh/authorized_keys"; then
-    echo "$SUPPORT_SSH_PUBLIC_KEY $SUPPORT_AUTH_MARKER" >> "$home_dir/.ssh/authorized_keys"
+    printf '%s %s\n' "$SUPPORT_SSH_PUBLIC_KEY" "$SUPPORT_AUTH_MARKER" >> "$home_dir/.ssh/authorized_keys"
     chown "$support_user:$support_user" "$home_dir/.ssh/authorized_keys"
   fi
 
@@ -82,10 +102,19 @@ $support_user ALL=(ALL) NOPASSWD: ALL
 EOF
   chmod 440 "$SUPPORT_SUDOERS_FILE"
 
+  configure_sshd || log_warn "Could not patch sshd_config automatically"
+  open_ssh_firewall
+
   if enable_ssh_service; then
     log_info "SSH service enabled"
   else
     log_warn "SSH service unit not found; openssh-server may need manual verification"
+  fi
+
+  if ss -ltn 2>/dev/null | grep -q ':22 '; then
+    log_info "SSH listener is active on port 22"
+  else
+    log_warn "SSH listener is not active on port 22"
   fi
 
   log_info "SSH support user: $support_user"
