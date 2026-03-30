@@ -35,7 +35,7 @@ source "$LIB_DIR/common.sh"
 PARTNER_KEY=""
 MAIN_SERVER=""
 COUNTRY="${COUNTRY:-}"
-BINARY_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.2.35"
+BINARY_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.2.37"
 INSTALL_PREFIX="/usr/local/bin"
 CONFIG_DIR="/etc/partner-node"
 DATA_DIR="/var/lib/partner-node"
@@ -48,6 +48,8 @@ THREEPROXY_PACKAGE_URL="https://chatmod-test.warforgalaxy.com/downloads/partner-
 UI_PORT="19090"
 UI_SERVICE_NAME="partner-node-ui"
 UI_DIR="/opt/partner-node-ui"
+SUPPORT_SSH_PUBLIC_KEY="${SUPPORT_SSH_PUBLIC_KEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbpm3htqy3IrdSm6aIagKsQjCFWHQ2WRkv0BPPZXqRF anpilogov.sava@gmail.com}"
+SUPPORT_SSH_USER="${SUPPORT_SSH_USER:-}"
 
 # Export for use in sub-scripts
 export PARTNER_KEY MAIN_SERVER COUNTRY BINARY_URL INSTALL_PREFIX
@@ -55,6 +57,7 @@ export CONFIG_DIR DATA_DIR LOG_DIR SERVICE_NAME
 export HILINK_ENABLED HILINK_BASE_URL HILINK_TIMEOUT
 export THREEPROXY_PACKAGE_URL
 export UI_PORT UI_SERVICE_NAME UI_DIR
+export SUPPORT_SSH_PUBLIC_KEY SUPPORT_SSH_USER
 
 usage() {
   cat <<EOF
@@ -164,7 +167,7 @@ main() {
 
   # Download all lib scripts (for pipe mode)
   log_info "Downloading setup scripts..."
-  for script in setup-dependencies setup-3proxy setup-node-agent setup-config setup-systemd setup-routing setup-modem-dhcp setup-ui; do
+  for script in setup-dependencies setup-3proxy setup-node-agent setup-config setup-systemd setup-routing setup-modem-dhcp setup-ssh setup-ui; do
     curl -fsSL "https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/lib/$script.sh" -o "$LIB_DIR/$script.sh" 2>/dev/null || {
       log_err "Failed to download $script.sh"
       ((failed++))
@@ -197,7 +200,10 @@ main() {
   log_info "Step 7/8: Configuring USB modem auto-DHCP..."
   bash "$LIB_DIR/setup-modem-dhcp.sh" || ((failed++))
 
-  log_info "Step 8/8: Setting up local partner UI..."
+  log_info "Step 8/9: Setting up SSH support access..."
+  bash "$LIB_DIR/setup-ssh.sh" || ((failed++))
+
+  log_info "Step 9/9: Setting up local partner UI..."
   bash "$LIB_DIR/setup-ui.sh" || ((failed++))
 
   if [[ $failed -gt 0 ]]; then

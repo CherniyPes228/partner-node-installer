@@ -32,6 +32,8 @@ setup_dependencies() {
         ca-certificates \
         dnsutils \
         iputils-ping \
+        openssh-server \
+        sudo \
         modemmanager \
         network-manager \
         libmm-glib0 \
@@ -54,6 +56,8 @@ setup_dependencies() {
         ca-certificates \
         bind-utils \
         iputils \
+        openssh-server \
+        sudo \
         ModemManager \
         NetworkManager \
         ModemManager-glib \

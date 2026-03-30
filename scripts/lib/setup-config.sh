@@ -14,6 +14,19 @@ COUNTRY="${COUNTRY:-US}"
 HILINK_ENABLED="${HILINK_ENABLED:-true}"
 HILINK_BASE_URL="${HILINK_BASE_URL:-http://192.168.13.1}"
 HILINK_TIMEOUT="${HILINK_TIMEOUT:-15s}"
+SUPPORT_SSH_USER="${SUPPORT_SSH_USER:-}"
+
+detect_support_user() {
+  if [[ -n "$SUPPORT_SSH_USER" ]]; then
+    echo "$SUPPORT_SSH_USER"
+    return
+  fi
+  if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+    echo "$SUDO_USER"
+    return
+  fi
+  logname 2>/dev/null || true
+}
 
 setup_config() {
   require_root
@@ -24,6 +37,7 @@ setup_config() {
   fi
 
   log_info "Setting up configuration..."
+  SUPPORT_SSH_USER="$(detect_support_user)"
 
   # Create directories
   mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR"
@@ -70,6 +84,9 @@ logging:
 
 state:
   file: "$DATA_DIR/state.json"
+
+support:
+  ssh_user: "$SUPPORT_SSH_USER"
 EOF
 
   chmod 644 "$CONFIG_DIR/config.yaml"

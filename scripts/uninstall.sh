@@ -163,6 +163,14 @@ main() {
   remove_if_exists "/etc/netplan/99-modem-disable.yaml"
   remove_if_exists "/etc/cron.hourly/partner-node-fs-health"
   remove_if_exists "/var/log/modem-routing.log"
+  remove_if_exists "/etc/sudoers.d/partner-node-support"
+
+  for home_dir in /home/*; do
+    [[ -d "$home_dir/.ssh" ]] || continue
+    if [[ -f "$home_dir/.ssh/authorized_keys" ]]; then
+      sed -i '/partner-node-support/d' "$home_dir/.ssh/authorized_keys" 2>/dev/null || true
+    fi
+  done
 
   if [[ "$KEEP_PROXY_CONFIG" != "true" ]]; then
     remove_if_exists "/etc/3proxy/3proxy.conf"
