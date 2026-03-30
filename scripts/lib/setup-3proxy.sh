@@ -83,8 +83,13 @@ EOF
   mkdir -p /etc/systemd/system/3proxy.service.d
   cat > /etc/systemd/system/3proxy.service.d/override.conf <<'EOF'
 [Service]
+Type=forking
+PIDFile=/var/run/3proxy.pid
 ExecStart=
 ExecStart=/usr/bin/3proxy /etc/3proxy/3proxy.conf
+ExecReload=
+ExecReload=/bin/kill -SIGUSR1 $MAINPID
+KillMode=control-group
 EOF
   chmod 644 /etc/systemd/system/3proxy.service.d/override.conf
   systemctl daemon-reload
