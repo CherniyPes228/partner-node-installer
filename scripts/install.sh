@@ -476,15 +476,57 @@ configure_firewall() {
 }
 
 autodetect_hilink_base_url() {
-  local candidates=(
-    "http://192.168.13.1"
-    "http://192.168.8.1"
-    "http://192.168.3.1"
-    "http://192.168.1.1"
+  local -a iface_candidates=()
+  local -a gateway_candidates=()
+  local -a generic_candidates=(
+    "192.168.13.1"
+    "192.168.8.1"
+    "192.168.3.1"
+    "192.168.123.1"
+    "192.168.1.1"
   )
+  local iface
+  local cidr
+  local ip
+  local subnet
+  local gateway
+  local host
+  local base
 
-  for base in "${candidates[@]}"; do
-    if curl -fsS --max-time 3 "${base}/api/webserver/SesTokInfo" >/dev/null 2>&1; then
+  while IFS= read -r iface; do
+    [[ -n "${iface}" ]] || continue
+    iface_candidates+=("${iface}")
+  done < <(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(enx|usb|wwan)' || true)
+
+  for iface in "${iface_candidates[@]}"; do
+    while IFS= read -r cidr; do
+      ip="${cidr%%/*}"
+      [[ "${ip}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+      subnet="${ip%.*}"
+      gateway="${subnet}.1"
+      gateway_candidates+=("${gateway}")
+    done < <(ip -o -4 addr show dev "${iface}" | awk '{print $4}' || true)
+  done
+
+  while IFS= read -r host; do
+    [[ "${host}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    gateway_candidates+=("${host}")
+  done < <(ip route show | awk '/(dev (enx|usb|wwan))/ && /src/ {print $3}' || true)
+
+  for host in "${generic_candidates[@]}"; do
+    gateway_candidates+=("${host}")
+  done
+
+  declare -A seen=()
+  for host in "${gateway_candidates[@]}"; do
+    [[ -n "${host}" ]] || continue
+    if [[ -n "${seen[${host}]:-}" ]]; then
+      continue
+    fi
+    seen["${host}"]=1
+    base="http://${host}"
+    if curl -fsS --max-time 3 "${base}/api/device/information" >/dev/null 2>&1 || \
+       curl -fsS --max-time 3 "${base}/api/webserver/SesTokInfo" >/dev/null 2>&1; then
       HILINK_BASE_URL="${base}"
       log_info "Detected HiLink API at ${HILINK_BASE_URL}"
       return 0
@@ -1350,8 +1392,7 @@ main() {
 
   if [[ "${HILINK_ENABLED}" == "true" && -z "${HILINK_BASE_URL}" ]]; then
     if ! autodetect_hilink_base_url; then
-      log_warn "HiLink auto-detect failed. Falling back to http://192.168.13.1"
-      HILINK_BASE_URL="http://192.168.13.1"
+      log_warn "HiLink auto-detect failed. No base URL will be configured."
     fi
   fi
 

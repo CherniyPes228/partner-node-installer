@@ -42,7 +42,7 @@ DATA_DIR="/var/lib/partner-node"
 LOG_DIR="/var/log/partner-node"
 SERVICE_NAME="partner-node"
 HILINK_ENABLED="true"
-HILINK_BASE_URL="http://192.168.13.1"
+HILINK_BASE_URL=""
 HILINK_TIMEOUT="15s"
 THREEPROXY_PACKAGE_URL="https://chatmod-test.warforgalaxy.com/downloads/partner-node/3proxy.deb"
 UI_PORT="19090"
@@ -102,6 +102,65 @@ parse_args() {
   done
 }
 
+autodetect_hilink_base_url() {
+  local -a iface_candidates=()
+  local -a gateway_candidates=()
+  local -a generic_candidates=(
+    "192.168.13.1"
+    "192.168.8.1"
+    "192.168.3.1"
+    "192.168.123.1"
+    "192.168.1.1"
+  )
+  local iface
+  local cidr
+  local ip
+  local subnet
+  local gateway
+  local host
+
+  while IFS= read -r iface; do
+    [[ -n "${iface}" ]] || continue
+    iface_candidates+=("${iface}")
+  done < <(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(enx|usb|wwan)' || true)
+
+  for iface in "${iface_candidates[@]}"; do
+    while IFS= read -r cidr; do
+      ip="${cidr%%/*}"
+      [[ "${ip}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+      subnet="${ip%.*}"
+      gateway="${subnet}.1"
+      gateway_candidates+=("${gateway}")
+    done < <(ip -o -4 addr show dev "${iface}" | awk '{print $4}' || true)
+  done
+
+  while IFS= read -r host; do
+    [[ "${host}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
+    gateway_candidates+=("${host}")
+  done < <(ip route show | awk '/(dev (enx|usb|wwan))/ && /src/ {print $3}' || true)
+
+  for host in "${generic_candidates[@]}"; do
+    gateway_candidates+=("${host}")
+  done
+
+  declare -A seen=()
+  for host in "${gateway_candidates[@]}"; do
+    [[ -n "${host}" ]] || continue
+    if [[ -n "${seen[${host}]:-}" ]]; then
+      continue
+    fi
+    seen["${host}"]=1
+    if curl -fsS --max-time 3 "http://${host}/api/device/information" >/dev/null 2>&1 || \
+       curl -fsS --max-time 3 "http://${host}/api/webserver/SesTokInfo" >/dev/null 2>&1; then
+      HILINK_BASE_URL="http://${host}"
+      log_info "Detected HiLink API at ${HILINK_BASE_URL}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 main() {
   log_info "╔════════════════════════════════════════════════════════════╗"
   log_info "║     Partner Node Zero-Touch Installer (v2 - Modular)      ║"
@@ -154,10 +213,17 @@ main() {
     fi
   fi
 
+  if [[ "${HILINK_ENABLED}" == "true" && -z "${HILINK_BASE_URL}" ]]; then
+    if ! autodetect_hilink_base_url; then
+      log_warn "Could not auto-detect HiLink API base URL, leaving it empty"
+    fi
+  fi
+
   log_info "Configuration:"
   log_info "  Partner Key: ${PARTNER_KEY:0:10}..."
   log_info "  MAIN Server: $MAIN_SERVER"
   log_info "  Country: $COUNTRY"
+  log_info "  HiLink Base URL: ${HILINK_BASE_URL:-<auto not found>}"
   log_info "  Binary URL: $BINARY_URL"
   log_info "  UI Port: $UI_PORT"
   log_info ""
