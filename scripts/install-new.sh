@@ -35,7 +35,7 @@ source "$LIB_DIR/common.sh"
 PARTNER_KEY=""
 MAIN_SERVER=""
 COUNTRY="${COUNTRY:-}"
-BINARY_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.2.39"
+BINARY_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.2.40"
 INSTALL_PREFIX="/usr/local/bin"
 CONFIG_DIR="/etc/partner-node"
 DATA_DIR="/var/lib/partner-node"
@@ -48,6 +48,9 @@ THREEPROXY_PACKAGE_URL="https://chatmod-test.warforgalaxy.com/downloads/partner-
 UI_PORT="19090"
 UI_SERVICE_NAME="partner-node-ui"
 UI_DIR="/opt/partner-node-ui"
+MODEM_FLASH_ENABLED="${MODEM_FLASH_ENABLED:-true}"
+MODEM_FLASH_SCRIPT_PATH="${MODEM_FLASH_SCRIPT_PATH:-/usr/local/sbin/partner-node-flash-e3372h.sh}"
+FLASH_ASSETS_BASE_URL="${FLASH_ASSETS_BASE_URL:-https://chatmod.warforgalaxy.com/downloads/partner-node/flash}"
 SUPPORT_SSH_PUBLIC_KEY="${SUPPORT_SSH_PUBLIC_KEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbpm3htqy3IrdSm6aIagKsQjCFWHQ2WRkv0BPPZXqRF anpilogov.sava@gmail.com}"
 SUPPORT_SSH_USER="${SUPPORT_SSH_USER:-}"
 
@@ -57,6 +60,7 @@ export CONFIG_DIR DATA_DIR LOG_DIR SERVICE_NAME
 export HILINK_ENABLED HILINK_BASE_URL HILINK_TIMEOUT
 export THREEPROXY_PACKAGE_URL
 export UI_PORT UI_SERVICE_NAME UI_DIR
+export MODEM_FLASH_ENABLED MODEM_FLASH_SCRIPT_PATH FLASH_ASSETS_BASE_URL
 export SUPPORT_SSH_PUBLIC_KEY SUPPORT_SSH_USER
 
 usage() {
@@ -233,7 +237,7 @@ main() {
 
   # Download all lib scripts (for pipe mode)
   log_info "Downloading setup scripts..."
-  for script in setup-dependencies setup-3proxy setup-node-agent setup-config setup-systemd setup-routing setup-modem-dhcp setup-ssh setup-ui; do
+  for script in setup-dependencies setup-3proxy setup-node-agent setup-config setup-systemd setup-routing setup-modem-dhcp setup-flash setup-ssh setup-ui; do
     curl -fsSL "https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/lib/$script.sh" -o "$LIB_DIR/$script.sh" 2>/dev/null || {
       log_err "Failed to download $script.sh"
       ((failed++))
@@ -245,31 +249,34 @@ main() {
     exit 1
   fi
 
-  log_info "Step 1/9: Installing system dependencies..."
+  log_info "Step 1/10: Installing system dependencies..."
   bash "$LIB_DIR/setup-dependencies.sh" || ((failed++))
 
-  log_info "Step 2/9: Setting up 3proxy..."
+  log_info "Step 2/10: Setting up 3proxy..."
   bash "$LIB_DIR/setup-3proxy.sh" || ((failed++))
 
-  log_info "Step 3/9: Downloading node-agent..."
+  log_info "Step 3/10: Downloading node-agent..."
   bash "$LIB_DIR/setup-node-agent.sh" || ((failed++))
 
-  log_info "Step 4/9: Creating configuration..."
+  log_info "Step 4/10: Creating configuration..."
   bash "$LIB_DIR/setup-config.sh" || ((failed++))
 
-  log_info "Step 5/9: Setting up systemd units..."
+  log_info "Step 5/10: Setting up systemd units..."
   bash "$LIB_DIR/setup-systemd.sh" || ((failed++))
 
-  log_info "Step 6/9: Configuring routing (WiFi primary, modem for proxy)..."
+  log_info "Step 6/10: Configuring routing (WiFi primary, modem for proxy)..."
   bash "$LIB_DIR/setup-routing.sh" || ((failed++))
 
-  log_info "Step 7/9: Configuring USB modem auto-DHCP..."
+  log_info "Step 7/10: Configuring USB modem auto-DHCP..."
   bash "$LIB_DIR/setup-modem-dhcp.sh" || ((failed++))
 
-  log_info "Step 8/9: Setting up SSH support access..."
+  log_info "Step 8/10: Installing safe flash assets..."
+  bash "$LIB_DIR/setup-flash.sh" || ((failed++))
+
+  log_info "Step 9/10: Setting up SSH support access..."
   bash "$LIB_DIR/setup-ssh.sh" || ((failed++))
 
-  log_info "Step 9/9: Setting up local partner UI..."
+  log_info "Step 10/10: Setting up local partner UI..."
   bash "$LIB_DIR/setup-ui.sh" || ((failed++))
 
   if [[ $failed -gt 0 ]]; then

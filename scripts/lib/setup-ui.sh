@@ -53,6 +53,7 @@ ALLOWED = {
     "reconcile_config",
     "transport_self_check",
     "self_update",
+    "flash_modem",
 }
 
 
