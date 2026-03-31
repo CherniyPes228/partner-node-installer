@@ -41,6 +41,44 @@ INTERMEDIATE_IMAGE="${INTERMEDIATE_IMAGE:-${IMAGES_DIR}/E3372h-153_Update_21.329
 MAIN_IMAGE="${MAIN_IMAGE:-${IMAGES_DIR}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin}"
 WEBUI_IMAGE="${WEBUI_IMAGE:-${IMAGES_DIR}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin}"
 
+find_huawei_pid() {
+  lsusb | awk 'tolower($0) ~ /12d1:/ && toupper($0) ~ /E3372/ { for (i=1; i<=NF; ++i) if ($i ~ /^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$/) { split(tolower($i), a, ":"); print a[2]; exit } }'
+}
+
+wait_for_port() {
+  local timeout="${1:-30}"
+  local elapsed=0
+  while [[ "${elapsed}" -lt "${timeout}" ]]; do
+    local first
+    first=$(compgen -G "/dev/ttyUSB*" | sort | head -n 1 || true)
+    if [[ -n "${first}" && -e "${first}" ]]; then
+      echo "${first}"
+      return 0
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  return 1
+}
+
+maybe_switch_mode() {
+  local pid="${1:-}"
+  if [[ -z "${pid}" ]]; then
+    return 0
+  fi
+  if ! command -v usb_modeswitch >/dev/null 2>&1; then
+    return 0
+  fi
+
+  case "${pid}" in
+    1f01|14dc|1506|14db|1505|10c6)
+      echo "STAGE:mode_switch"
+      usb_modeswitch -v 0x12d1 -p "0x${pid}" -J >/dev/null 2>&1 || true
+      sleep 4
+      ;;
+  esac
+}
+
 echo "STAGE:precheck"
 for f in "$BALONG_USBLOAD" "$BALONG_FLASH" "$USBLOADER" "$USBLSAFE" "$INTERMEDIATE_IMAGE" "$MAIN_IMAGE" "$WEBUI_IMAGE"; do
   if [[ ! -f "$f" ]]; then
@@ -49,8 +87,17 @@ for f in "$BALONG_USBLOAD" "$BALONG_FLASH" "$USBLOADER" "$USBLSAFE" "$INTERMEDIA
   fi
 done
 if [[ ! -e "$PORT" ]]; then
-  echo "ERROR:flash port not found: $PORT"
-  exit 3
+  PID="$(find_huawei_pid || true)"
+  if [[ -z "${PID}" ]]; then
+    echo "ERROR:supported Huawei E3372h-153 device was not detected on USB"
+    exit 3
+  fi
+  maybe_switch_mode "${PID}"
+  PORT="$(wait_for_port 30 || true)"
+  if [[ -z "${PORT}" || ! -e "${PORT}" ]]; then
+    echo "ERROR:flash serial port not found after mode switch"
+    exit 3
+  fi
 fi
 
 echo "STAGE:usbload"

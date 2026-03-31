@@ -35,6 +35,7 @@ setup_dependencies() {
         openssh-server \
         sudo \
         modemmanager \
+        usb-modeswitch \
         network-manager \
         libmm-glib0 \
         2>&1 | grep -E "^(Get:|Setting up)" || true
@@ -59,6 +60,7 @@ setup_dependencies() {
         openssh-server \
         sudo \
         ModemManager \
+        usb_modeswitch \
         NetworkManager \
         ModemManager-glib \
         2>&1 | grep -E "^(Installed|Complete)" || true
@@ -78,7 +80,8 @@ setup_dependencies() {
         openssl \
         ca-certificates \
         bind-tools \
-        iputils
+        iputils \
+        usb-modeswitch
 
       log_info "Dependencies installed"
       ;;
