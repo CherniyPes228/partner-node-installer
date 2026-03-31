@@ -31,6 +31,7 @@ cat > "${UI_DIR}/server.py" <<'PY'
 import json
 import mimetypes
 import os
+import re
 import subprocess
 import time
 import urllib.error
@@ -45,6 +46,8 @@ LISTEN_PORT = int(os.environ.get("UI_PORT", "19090"))
 ROOT_DIR = os.path.dirname(__file__)
 SPEEDTEST_URL = os.environ.get("PARTNER_SPEEDTEST_URL", "http://speedtest.tele2.net/1MB.zip")
 SPEEDTEST_BYTES = int(os.environ.get("PARTNER_SPEEDTEST_BYTES", "2000000"))
+MODEM_ALIAS_PREFIX = os.environ.get("MODEM_ALIAS_PREFIX", "172.31")
+MODEM_ALIAS_PORT = int(os.environ.get("MODEM_ALIAS_PORT", "80"))
 
 ALLOWED = {
     "self_check",
@@ -65,6 +68,100 @@ def json_request(url, method="GET", payload=None):
     req = urllib.request.Request(url, method=method, data=body, headers=headers)
     with urllib.request.urlopen(req, timeout=25) as resp:
         return json.loads(resp.read().decode("utf-8"))
+
+
+def alias_host_for_ordinal(ordinal):
+    try:
+        ordinal = int(ordinal)
+    except Exception:
+        return ""
+    if ordinal <= 0 or ordinal > 254:
+        return ""
+    return f"{MODEM_ALIAS_PREFIX}.{ordinal}.1"
+
+
+def extract_alias_ordinal(host_header):
+    host = str(host_header or "").strip().split(":", 1)[0]
+    match = re.fullmatch(r"172\.31\.(\d{1,3})\.1", host)
+    if not match:
+        return None
+    ordinal = int(match.group(1))
+    if ordinal <= 0 or ordinal > 254:
+        return None
+    return ordinal
+
+
+def ensure_alias_redirect():
+    rule = [
+        "iptables", "-t", "nat", "-C", "OUTPUT",
+        "-d", "172.31.0.0/16", "-p", "tcp", "--dport", str(MODEM_ALIAS_PORT),
+        "-j", "REDIRECT", "--to-ports", str(LISTEN_PORT),
+    ]
+    add_rule = [
+        "iptables", "-t", "nat", "-A", "OUTPUT",
+        "-d", "172.31.0.0/16", "-p", "tcp", "--dport", str(MODEM_ALIAS_PORT),
+        "-j", "REDIRECT", "--to-ports", str(LISTEN_PORT),
+    ]
+    try:
+        subprocess.run(rule, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except subprocess.CalledProcessError:
+        subprocess.run(add_rule, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def ensure_alias_ip(alias_host):
+    if not alias_host:
+        return
+    cidr = f"{alias_host}/32"
+    current = subprocess.run(
+        ["ip", "-o", "-4", "addr", "show", "dev", "lo"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if cidr in (current.stdout or ""):
+        return
+    subprocess.run(
+        ["ip", "addr", "add", cidr, "dev", "lo"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def reconcile_aliases(overview):
+    ensure_alias_redirect()
+    if not isinstance(overview, dict):
+        return
+    for modem in overview.get("modems", []) or []:
+        if not isinstance(modem, dict):
+            continue
+        alias_host = alias_host_for_ordinal(modem.get("ordinal") or modem.get("modem_number"))
+        if alias_host:
+            ensure_alias_ip(alias_host)
+
+
+def fetch_overview():
+    qs = urllib.parse.urlencode({"partner_key": PARTNER_KEY})
+    data = json_request(f"{MAIN_SERVER}/api/partner/overview?{qs}")
+    if isinstance(data, dict):
+        data.setdefault("partner_key", PARTNER_KEY)
+        data.setdefault("main_server", MAIN_SERVER)
+        reconcile_aliases(data)
+    return data
+
+
+def resolve_alias_target(ordinal):
+    overview = fetch_overview()
+    modems = overview.get("modems", []) if isinstance(overview, dict) else []
+    for modem in modems:
+        if not isinstance(modem, dict):
+            continue
+        if int(modem.get("ordinal") or modem.get("modem_number") or 0) != int(ordinal):
+            continue
+        base = str(modem.get("local_base_url") or "").strip().rstrip("/")
+        if base:
+            return modem, base
+    return None, ""
 
 
 def normalize_target_url(raw_url, bytes_count):
@@ -180,18 +277,68 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _proxy_alias_request(self, ordinal):
+        modem, upstream_base = resolve_alias_target(ordinal)
+        if not upstream_base:
+            self._send_text(404, f"modem alias #{ordinal} is not available")
+            return
+
+        body = None
+        length = int(self.headers.get("Content-Length", "0") or "0")
+        if length > 0:
+            body = self.rfile.read(length)
+
+        upstream_url = upstream_base + self.path
+        headers = {}
+        for key, value in self.headers.items():
+            lower = key.lower()
+            if lower in {"host", "content-length", "connection"}:
+                continue
+            headers[key] = value
+        headers["Host"] = urllib.parse.urlparse(upstream_base).netloc
+
+        req = urllib.request.Request(upstream_url, data=body, method=self.command, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                payload = resp.read()
+                self.send_response(resp.status)
+                for key, value in resp.headers.items():
+                    lower = key.lower()
+                    if lower in {"transfer-encoding", "connection", "content-length"}:
+                        continue
+                    if lower == "location" and value.startswith(upstream_base):
+                        value = value.replace(upstream_base, f"http://{alias_host_for_ordinal(ordinal)}", 1)
+                    self.send_header(key, value)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+        except urllib.error.HTTPError as err:
+            payload = err.read()
+            self.send_response(err.code)
+            for key, value in err.headers.items():
+                lower = key.lower()
+                if lower in {"transfer-encoding", "connection", "content-length"}:
+                    continue
+                self.send_header(key, value)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+        except Exception as err:
+            self._send_text(502, str(err))
+
     def do_GET(self):
+        alias_ordinal = extract_alias_ordinal(self.headers.get("Host", ""))
+        if alias_ordinal is not None:
+            self._proxy_alias_request(alias_ordinal)
+            return
+
         if self.path == "/healthz":
             self._send_text(200, "ok")
             return
 
         if self.path == "/api/overview":
             try:
-                qs = urllib.parse.urlencode({"partner_key": PARTNER_KEY})
-                data = json_request(f"{MAIN_SERVER}/api/partner/overview?{qs}")
-                if isinstance(data, dict):
-                    data.setdefault("partner_key", PARTNER_KEY)
-                    data.setdefault("main_server", MAIN_SERVER)
+                data = fetch_overview()
                 self._send_json(200, data)
             except urllib.error.HTTPError as err:
                 self._send_text(err.code, err.read().decode("utf-8", errors="ignore"))
@@ -240,6 +387,11 @@ class Handler(BaseHTTPRequestHandler):
         self._serve_file(os.path.join(ROOT_DIR, "index.html"))
 
     def do_POST(self):
+        alias_ordinal = extract_alias_ordinal(self.headers.get("Host", ""))
+        if alias_ordinal is not None:
+            self._proxy_alias_request(alias_ordinal)
+            return
+
         if self.path == "/api/speedtest":
             try:
                 length = int(self.headers.get("Content-Length", "0"))
@@ -332,6 +484,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    ensure_alias_redirect()
     server = HTTPServer((LISTEN_ADDR, LISTEN_PORT), Handler)
     server.serve_forever()
 PY
@@ -346,7 +499,7 @@ EOF
 cat > "/etc/systemd/system/${UI_SERVICE_NAME}.service" <<EOF
 [Unit]
 Description=Partner Node Local UI
-After=network-online.target ${SERVICE_NAME}.service
+After=network-online.target partner-node.service
 Wants=network-online.target
 
 [Service]

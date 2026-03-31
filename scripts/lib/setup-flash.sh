@@ -43,9 +43,10 @@ WEBUI_IMAGE="${WEBUI_IMAGE:-${IMAGES_DIR}/Update_WEBUI_17.100.13.01.03_HILINK_Mo
 TARGET_MAIN_VERSION="${TARGET_MAIN_VERSION:-22.333.01.00.00}"
 TARGET_WEBUI_VERSION="${TARGET_WEBUI_VERSION:-17.100.13.113.03}"
 TARGET_WEBUI_PACKAGE_LABEL="${TARGET_WEBUI_PACKAGE_LABEL:-17.100.13.01.03}"
+FLASH_PREFER_HILINK_LOCAL_UPDATE="${FLASH_PREFER_HILINK_LOCAL_UPDATE:-false}"
 
 find_huawei_pid() {
-  lsusb | awk 'tolower($0) ~ /12d1:/ && toupper($0) ~ /E3372/ { for (i=1; i<=NF; ++i) if ($i ~ /^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$/) { split(tolower($i), a, ":"); print a[2]; exit } }'
+  lsusb | awk 'tolower($0) ~ /12d1:/ { for (i=1; i<=NF; ++i) if ($i ~ /^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$/) { split(tolower($i), a, ":"); pid=a[2]; if (pid=="1f01" || pid=="14dc" || pid=="1506" || pid=="14db" || pid=="1505" || pid=="10c6" || pid=="1c20") { print pid; exit } } }'
 }
 
 extract_tag() {
@@ -390,7 +391,7 @@ maybe_switch_mode() {
   fi
 
   case "${pid}" in
-    1f01|14dc|1506|14db|1505|10c6)
+    1f01|14dc|1506|14db|1505|10c6|1c20)
       echo "STAGE:mode_switch"
       usb_modeswitch -v 0x12d1 -p "0x${pid}" -J >/dev/null 2>&1 || true
       sleep 4
@@ -429,7 +430,7 @@ if [[ ! -e "$PORT" ]]; then
   PORT="$(pick_serial_port 10 || true)"
 fi
 
-if [[ ! -e "$PORT" ]]; then
+if [[ "${FLASH_PREFER_HILINK_LOCAL_UPDATE}" == "true" && ! -e "$PORT" ]]; then
   PID="$(find_huawei_pid || true)"
   HILINK_BASE="$(find_hilink_base_url || true)"
   if [[ -n "${HILINK_BASE}" ]]; then
@@ -455,6 +456,11 @@ if [[ ! -e "$PORT" ]]; then
   maybe_switch_mode "${PID}"
   PORT="$(pick_serial_port 30 || true)"
   if [[ -z "${PORT}" || ! -e "${PORT}" ]]; then
+    PID_AFTER="$(find_huawei_pid || true)"
+    if [[ "${PID_AFTER}" == "1c20" ]]; then
+      echo "ERROR:modem is stuck in charging mode (12d1:1c20); replug the modem and retry flashing"
+      exit 4
+    fi
     echo "ERROR:flash serial port not found after mode switch"
     exit 3
   fi
