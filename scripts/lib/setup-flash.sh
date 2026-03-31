@@ -133,9 +133,25 @@ poll_hilink_update_status() {
   local elapsed=0
   local xml=""
   local status=""
+  local saw_disconnect=0
+  local pid=""
 
   while [[ "${elapsed}" -lt "${timeout}" ]]; do
     xml=$(curl -fsS --max-time 8 "${base}/api/monitoring/check-notifications" 2>/dev/null || true)
+    if [[ -z "${xml}" ]]; then
+      saw_disconnect=1
+      pid="$(find_huawei_pid || true)"
+      if [[ "${pid}" == "1c20" ]]; then
+        echo "ERROR:modem entered charging mode (12d1:1c20) during local update; replug and retry flashing"
+        return 1
+      fi
+      if wait_for_hilink_ready "${base}" 30; then
+        return 0
+      fi
+      sleep 5
+      elapsed=$((elapsed + 5))
+      continue
+    fi
     status=$(printf '%s' "${xml}" | extract_tag "OnlineUpdateStatus" | tr -d '\r\n\t ')
     case "${status}" in
       20|70|80)
@@ -150,6 +166,9 @@ poll_hilink_update_status() {
         return 0
         ;;
     esac
+    if [[ "${saw_disconnect}" == "1" ]] && wait_for_hilink_ready "${base}" 10; then
+      return 0
+    fi
     sleep 5
     elapsed=$((elapsed + 5))
   done
