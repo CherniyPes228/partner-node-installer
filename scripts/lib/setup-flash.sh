@@ -46,7 +46,7 @@ TARGET_WEBUI_PACKAGE_LABEL="${TARGET_WEBUI_PACKAGE_LABEL:-17.100.13.01.03}"
 FLASH_PREFER_HILINK_LOCAL_UPDATE="${FLASH_PREFER_HILINK_LOCAL_UPDATE:-false}"
 
 find_huawei_pid() {
-  lsusb | awk 'tolower($0) ~ /12d1:/ { for (i=1; i<=NF; ++i) if ($i ~ /^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$/) { split(tolower($i), a, ":"); pid=a[2]; if (pid=="1f01" || pid=="14dc" || pid=="1506" || pid=="14db" || pid=="1505" || pid=="10c6" || pid=="1c20") { print pid; exit } } }'
+  lsusb | awk 'tolower($0) ~ /12d1:/ { for (i=1; i<=NF; ++i) if ($i ~ /^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$/) { split(tolower($i), a, ":"); pid=a[2]; if (pid=="1f01" || pid=="14dc" || pid=="1442" || pid=="1506" || pid=="14db" || pid=="1505" || pid=="10c6" || pid=="1c20") { print pid; exit } } }'
 }
 
 extract_tag() {
@@ -391,7 +391,7 @@ maybe_switch_mode() {
   fi
 
   case "${pid}" in
-    1f01|14dc|1506|14db|1505|10c6|1c20)
+    1f01|14dc|1442|1506|14db|1505|10c6|1c20)
       echo "STAGE:mode_switch"
       usb_modeswitch -v 0x12d1 -p "0x${pid}" -J >/dev/null 2>&1 || true
       sleep 4
