@@ -50,6 +50,13 @@ const registryMessage = ref("")
 const billingSaving = ref("")
 const registrySaving = ref("")
 const simChecking = ref("")
+const flashOverlay = ref({
+  open: false,
+  status: "",
+  stage: "",
+  message: "",
+  label: "",
+})
 const speedTestTarget = ref("http://speedtest.tele2.net/1MB.zip")
 const speedTestCustomUrl = ref("")
 const speedTestTargets = [
@@ -112,6 +119,7 @@ const simCheckRequiredCount = computed(() => modemBilling.value.filter((item) =>
 const activeNodeId = computed(() => selectedNode.value !== "all" ? selectedNode.value : (nodes.value[0]?.node_id || ""))
 const filteredModems = computed(() => selectedNode.value === "all" ? modems.value : modems.value.filter((item) => item.node_id === selectedNode.value))
 const lastResults = computed(() => commandHistory.value.slice(0, 12))
+const activeFlashModem = computed(() => modems.value.find((item) => ["queued", "running", "done", "failed"].includes(String(item.flash_status || "").toLowerCase())))
 
 function bytesLabel(value) {
   const size = Number(value || 0)
@@ -132,6 +140,86 @@ function relativeTime(value) {
   if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m`
   if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h`
   return `${Math.floor(diffSec / 86400)}d`
+}
+
+function flashProgressPercent(stage, status) {
+  const normalizedStatus = String(status || "").toLowerCase()
+  const normalizedStage = String(stage || "").toLowerCase()
+  if (normalizedStatus === "done" || normalizedStage === "completed" || normalizedStage === "verified") return 100
+  if (normalizedStatus === "failed") return 100
+  const byStage = {
+    queued: 5,
+    precheck: 8,
+    bind_option_driver: 12,
+    mode_switch: 16,
+    hilink_local_update: 22,
+    usbload: 26,
+    safe_loader: 34,
+    flash_intermediate: 46,
+    wait_reconnect_after_intermediate: 54,
+    flash_main: 68,
+    wait_reconnect_after_main: 76,
+    flash_webui: 88,
+    switch_to_hilink: 92,
+    reset_userdata: 95,
+    verify: 98,
+    completed: 100,
+  }
+  return byStage[normalizedStage] || (normalizedStatus === "running" ? 18 : 0)
+}
+
+function flashStageLabel(stage, status) {
+  const normalizedStatus = String(status || "").toLowerCase()
+  const normalizedStage = String(stage || "").toLowerCase()
+  if (normalizedStatus === "done") return "Flashing finished"
+  if (normalizedStatus === "failed") return "Flashing failed"
+  const labels = {
+    queued: "Queued",
+    precheck: "Precheck",
+    bind_option_driver: "Binding serial driver",
+    mode_switch: "Switching modem mode",
+    hilink_local_update: "HiLink local update",
+    usbload: "Uploading bootloader",
+    safe_loader: "Uploading safe loader",
+    flash_intermediate: "Writing intermediate firmware",
+    wait_reconnect_after_intermediate: "Waiting for intermediate reboot",
+    flash_main: "Writing main firmware",
+    wait_reconnect_after_main: "Waiting for firmware reboot",
+    flash_webui: "Writing WebUI",
+    switch_to_hilink: "Switching back to HiLink",
+    reset_userdata: "Resetting userdata",
+    verify: "Verifying final versions",
+    completed: "Completed",
+    verified: "Verified",
+  }
+  return labels[normalizedStage] || (normalizedStatus === "running" ? "Flashing in progress" : "Preparing")
+}
+
+function openFlashOverlay(label, status = "queued", stage = "queued", message = "Safe flash queued. Do not unplug or reconnect the modem until the process finishes.") {
+  flashOverlay.value = { open: true, status, stage, message, label }
+}
+
+function syncFlashOverlayFromOverview() {
+  const current = activeFlashModem.value
+  if (current) {
+    const label = `#${current.modem_number || "?"} • ${current.id}${current.node_id ? ` • ${current.node_id}` : ""}`
+    flashOverlay.value = {
+      open: true,
+      status: current.flash_status || "running",
+      stage: current.flash_stage || "running",
+      message: current.flash_message || "Safe flash is running. Do not unplug or reconnect the modem until the process finishes.",
+      label,
+    }
+    return
+  }
+  if (flashOverlay.value.open && ["queued", "running"].includes(String(flashOverlay.value.status || "").toLowerCase())) {
+    flashOverlay.value = {
+      ...flashOverlay.value,
+      status: "done",
+      stage: "completed",
+      message: "Flash workflow finished. Refresh the modem table and verify that the target firmware and WebUI versions are shown.",
+    }
+  }
 }
 
 function tone(status) {
@@ -390,6 +478,7 @@ async function flashRegistryModem(item) {
   registrySaving.value = item.imei || `${item.last_seen_node_id}:${item.last_seen_modem_id}`
   registryMessage.value = ""
   try {
+    openFlashOverlay(`Modem #${item.modem_number}${item.last_seen_modem_id ? ` • ${item.last_seen_modem_id}` : ""}`, "queued", "queued")
     const response = await fetch("/api/command", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -408,6 +497,13 @@ async function flashRegistryModem(item) {
     registryMessage.value = `flash queued for modem #${item.modem_number}`
     await loadOverview(false)
   } catch (error) {
+    flashOverlay.value = {
+      ...flashOverlay.value,
+      open: true,
+      status: "failed",
+      stage: "failed",
+      message: error instanceof Error ? error.message : "flash command failed",
+    }
     registryMessage.value = error instanceof Error ? error.message : "flash command failed"
   } finally {
     registrySaving.value = ""
@@ -419,6 +515,7 @@ async function flashLiveModem(modem) {
   registrySaving.value = key
   registryMessage.value = ""
   try {
+    openFlashOverlay(`#${modem.modem_number || "?"} • ${modem.id}${modem.node_id ? ` • ${modem.node_id}` : ""}`, "queued", "queued")
     const response = await fetch("/api/command", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -437,6 +534,13 @@ async function flashLiveModem(modem) {
     registryMessage.value = `flash queued for ${modem.id}`
     await loadOverview(false)
   } catch (error) {
+    flashOverlay.value = {
+      ...flashOverlay.value,
+      open: true,
+      status: "failed",
+      stage: "failed",
+      message: error instanceof Error ? error.message : "flash command failed",
+    }
     registryMessage.value = error instanceof Error ? error.message : "flash command failed"
   } finally {
     registrySaving.value = ""
@@ -445,6 +549,7 @@ async function flashLiveModem(modem) {
 
 function quickAction(type) { sendCommand(type, "quick") }
 watch(selectedNode, () => { if (!filteredModems.value.some((item) => item.id === selectedModem.value)) selectedModem.value = "all" })
+watch([modems, overview], () => { syncFlashOverlayFromOverview() }, { deep: true })
 onMounted(() => { loadOverview(); fallbackTimer = window.setInterval(() => { if (realtimeState.value !== "active") loadOverview(false) }, 15000) })
 onBeforeUnmount(() => { closeRealtime(); clearRefreshTimer(); if (fallbackTimer) { window.clearInterval(fallbackTimer); fallbackTimer = null } })
 </script>
@@ -659,5 +764,39 @@ onBeforeUnmount(() => { closeRealtime(); clearRefreshTimer(); if (fallbackTimer)
         </TabsContent>
       </Tabs>
     </section>
+    <div v-if="flashOverlay.open" class="fixed inset-0 z-[70] flex items-center justify-center bg-background/80 px-4 backdrop-blur-sm">
+      <div class="w-full max-w-2xl rounded-[32px] border border-border/70 bg-card p-6 shadow-2xl">
+        <div class="flex items-start justify-between gap-4">
+          <div class="space-y-2">
+            <Badge variant="destructive" class="rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.18em]">Flashing modem</Badge>
+            <h2 class="text-2xl font-semibold tracking-tight">{{ flashOverlay.label || "Selected modem" }}</h2>
+            <p class="text-sm leading-6 text-muted-foreground">
+              Do not unplug, reconnect, or move the modem to another USB port until the process reaches completed state.
+            </p>
+          </div>
+          <Button v-if="['done', 'failed'].includes(String(flashOverlay.status || '').toLowerCase())" variant="outline" class="rounded-full" @click="flashOverlay.open = false">Close</Button>
+        </div>
+        <div class="mt-6 space-y-3">
+          <div class="flex items-center justify-between gap-3 text-sm">
+            <span class="font-medium">{{ flashStageLabel(flashOverlay.stage, flashOverlay.status) }}</span>
+            <Badge :variant="tone(flashOverlay.status || flashOverlay.stage)" class="rounded-full capitalize">{{ flashOverlay.status || "queued" }}</Badge>
+          </div>
+          <div class="h-3 overflow-hidden rounded-full bg-muted">
+            <div
+              class="h-full rounded-full transition-all duration-500"
+              :class="String(flashOverlay.status || '').toLowerCase() === 'failed' ? 'bg-destructive' : 'bg-primary'"
+              :style="{ width: `${flashProgressPercent(flashOverlay.stage, flashOverlay.status)}%` }"
+            />
+          </div>
+          <div class="flex items-center justify-between text-xs text-muted-foreground">
+            <span>{{ flashProgressPercent(flashOverlay.stage, flashOverlay.status) }}%</span>
+            <span>{{ flashOverlay.stage || "queued" }}</span>
+          </div>
+        </div>
+        <div class="mt-6 rounded-[24px] border border-border/70 bg-muted/40 p-4 text-sm leading-6">
+          {{ flashOverlay.message || "Safe flash is running. Do not unplug or reconnect the modem until the process finishes." }}
+        </div>
+      </div>
+    </div>
   </main>
 </template>
