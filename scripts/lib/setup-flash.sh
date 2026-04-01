@@ -31,7 +31,7 @@ done
 FLASH_ROOT="${FLASH_ROOT:-/opt/partner-node-flash}"
 TOOLS_DIR="${TOOLS_DIR:-${FLASH_ROOT}/tools}"
 IMAGES_DIR="${IMAGES_DIR:-${FLASH_ROOT}/images}"
-PORT="${FLASH_PORT:-/dev/ttyUSB0}"
+PORT="${FLASH_PORT:-}"
 
 BALONG_USBLOAD="${BALONG_USBLOAD:-${TOOLS_DIR}/balong-usbload}"
 BALONG_FLASH="${BALONG_FLASH:-${TOOLS_DIR}/balong_flash}"
@@ -50,7 +50,7 @@ RECOVERY_TARGET_WEBUI_VERSION_209="${RECOVERY_TARGET_WEBUI_VERSION_209:-17.100.1
 FLASH_PREFER_HILINK_LOCAL_UPDATE="${FLASH_PREFER_HILINK_LOCAL_UPDATE:-false}"
 
 find_huawei_pid() {
-  lsusb | awk 'tolower($0) ~ /12d1:/ { for (i=1; i<=NF; ++i) if ($i ~ /^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$/) { split(tolower($i), a, ":"); pid=a[2]; if (pid=="1f01" || pid=="14dc" || pid=="1442" || pid=="1506" || pid=="14db" || pid=="1505" || pid=="10c6" || pid=="1c20") { print pid; exit } } }'
+  lsusb | awk 'tolower($0) ~ /12d1:/ { for (i=1; i<=NF; ++i) if ($i ~ /^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$/) { split(tolower($i), a, ":"); pid=a[2]; if (pid=="1f01" || pid=="14dc" || pid=="1442" || pid=="1443" || pid=="1506" || pid=="14db" || pid=="1505" || pid=="10c6" || pid=="1c05" || pid=="1c20") { print pid; exit } } }'
 }
 
 extract_tag() {
@@ -225,7 +225,7 @@ wait_for_port() {
   local elapsed=0
   while [[ "${elapsed}" -lt "${timeout}" ]]; do
     local first
-    first=$(compgen -G "/dev/ttyUSB*" | sort | head -n 1 || true)
+    first=$(compgen -G "/dev/ttyUSB*" | sort | tail -n 1 || true)
     if [[ -n "${first}" && -e "${first}" ]]; then
       echo "${first}"
       return 0
@@ -310,7 +310,7 @@ wait_for_port_reconnect() {
   local elapsed=0
   while [[ "${elapsed}" -lt "${timeout}" ]]; do
     local first
-    first=$(compgen -G "/dev/ttyUSB*" | sort | head -n 1 || true)
+    first=$(compgen -G "/dev/ttyUSB*" | sort | tail -n 1 || true)
     if [[ -n "${first}" && -e "${first}" ]]; then
       local viewer
       viewer="$(find_viewer_port || true)"
@@ -458,6 +458,66 @@ if [[ ! -e "$PORT" ]]; then
   fi
   maybe_bind_option_driver "${PID}"
   PORT="$(pick_serial_port 10 || true)"
+fi
+
+if [[ -n "${PORT}" && -e "${PORT}" ]]; then
+  VIEWER_PORT="$(find_viewer_port || true)"
+  if [[ -n "${VIEWER_PORT}" ]]; then
+    PORT="${VIEWER_PORT}"
+  fi
+fi
+
+PID="$(find_huawei_pid || true)"
+CURRENT_MAIN="$(current_main_version "$PORT" | tr -d '\r\n\t ' || true)"
+USE_209_RECOVERY_CHAIN=false
+if [[ "${CURRENT_MAIN}" == 21.329.62.00.209* ]]; then
+  USE_209_RECOVERY_CHAIN=true
+fi
+if [[ "${USE_209_RECOVERY_CHAIN}" == "false" && -n "${PORT}" && ( "${PID}" == "1c05" || "${PID}" == "1506" || "${PID}" == "1442" || "${PID}" == "1443" ) ]]; then
+  USE_209_RECOVERY_CHAIN=true
+fi
+
+if [[ "${USE_209_RECOVERY_CHAIN}" == "true" ]]; then
+  echo "STAGE:flash_main_209"
+  "$BALONG_FLASH" -p "$PORT" "$RECOVERY_MAIN_IMAGE_209"
+
+  echo "STAGE:wait_reconnect_after_main"
+  PORT="$(wait_for_port_reconnect "$PORT" 120 || true)"
+  if [[ -z "${PORT}" || ! -e "${PORT}" ]]; then
+    echo "ERROR:flash serial port not found after main firmware reboot"
+    exit 5
+  fi
+
+  echo "STAGE:flash_webui_209"
+  "$BALONG_FLASH" -p "$PORT" "$RECOVERY_WEBUI_IMAGE_209"
+
+  PORT="$(wait_for_port_reconnect "$PORT" 90 || true)"
+  if [[ -n "${PORT}" && -e "${PORT}" ]]; then
+    switch_to_hilink_composition "$PORT" || true
+  fi
+
+  HILINK_BASE="$(find_hilink_base_url || true)"
+  if [[ -z "${HILINK_BASE}" ]] || ! wait_for_hilink_ready "${HILINK_BASE}" 120; then
+    echo "ERROR:hilink api did not return after webui flash"
+    exit 6
+  fi
+
+  if reset_userdata_via_telnet "${HILINK_BASE}"; then
+    sleep 8
+    if ! wait_for_hilink_ready "${HILINK_BASE}" 180; then
+      HILINK_BASE="$(find_hilink_base_url || true)"
+      if [[ -z "${HILINK_BASE}" ]] || ! wait_for_hilink_ready "${HILINK_BASE}" 180; then
+        echo "ERROR:modem did not return after userdata reset"
+        exit 6
+      fi
+    fi
+  fi
+
+  echo "STAGE:verify"
+  verify_target_versions "${HILINK_BASE}" "${RECOVERY_TARGET_WEBUI_VERSION_209}" "${RECOVERY_TARGET_WEBUI_VERSION_209}" || exit 7
+  echo "modem_id=${MODEM_ID} ordinal=${ORDINAL} port=${PORT} base=${HILINK_BASE}"
+  echo "STAGE:completed"
+  exit 0
 fi
 
 if [[ "${FLASH_PREFER_HILINK_LOCAL_UPDATE}" == "true" && ! -e "$PORT" ]]; then
