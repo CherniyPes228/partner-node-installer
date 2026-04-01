@@ -37,6 +37,7 @@ BALONG_USBLOAD="${BALONG_USBLOAD:-${TOOLS_DIR}/balong-usbload}"
 BALONG_FLASH="${BALONG_FLASH:-${TOOLS_DIR}/balong_flash}"
 USBLOADER="${USBLOADER:-${TOOLS_DIR}/usbloader-3372h.bin}"
 USBLSAFE="${USBLSAFE:-${TOOLS_DIR}/usblsafe-3372h.bin}"
+RECOVERY_IMAGE="${RECOVERY_IMAGE:-${IMAGES_DIR}/E3372h-153_Update_21.329.62.00.209.bin}"
 INTERMEDIATE_IMAGE="${INTERMEDIATE_IMAGE:-${IMAGES_DIR}/E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin}"
 MAIN_IMAGE="${MAIN_IMAGE:-${IMAGES_DIR}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin}"
 WEBUI_IMAGE="${WEBUI_IMAGE:-${IMAGES_DIR}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin}"
@@ -433,7 +434,7 @@ maybe_bind_option_driver() {
 }
 
 echo "STAGE:precheck"
-for f in "$BALONG_USBLOAD" "$BALONG_FLASH" "$USBLOADER" "$USBLSAFE" "$INTERMEDIATE_IMAGE" "$MAIN_IMAGE" "$WEBUI_IMAGE"; do
+for f in "$BALONG_USBLOAD" "$BALONG_FLASH" "$USBLOADER" "$USBLSAFE" "$RECOVERY_IMAGE" "$INTERMEDIATE_IMAGE" "$MAIN_IMAGE" "$WEBUI_IMAGE"; do
   if [[ ! -f "$f" ]]; then
     echo "ERROR:missing file $f"
     exit 2
@@ -489,6 +490,14 @@ echo "STAGE:usbload"
 "$BALONG_USBLOAD" -p "$PORT" "$USBLOADER"
 echo "STAGE:safe_loader"
 "$BALONG_FLASH" -p "$PORT" "$USBLSAFE"
+echo "STAGE:flash_recovery"
+"$BALONG_FLASH" -p "$PORT" "$RECOVERY_IMAGE"
+echo "STAGE:wait_reconnect_after_recovery"
+PORT="$(wait_for_port_reconnect "$PORT" 120 || true)"
+if [[ -z "${PORT}" || ! -e "${PORT}" ]]; then
+  echo "ERROR:flash serial port not found after recovery firmware reboot"
+  exit 5
+fi
 echo "STAGE:flash_intermediate"
 "$BALONG_FLASH" -p "$PORT" "$INTERMEDIATE_IMAGE"
 echo "STAGE:wait_reconnect_after_intermediate"
@@ -563,6 +572,7 @@ setup_flash() {
   download_asset "${FLASH_ASSETS_BASE_URL}/balong_flash" "${tools_dir}/balong_flash"
   download_asset "${FLASH_ASSETS_BASE_URL}/usbloader-3372h.bin" "${tools_dir}/usbloader-3372h.bin"
   download_asset "${FLASH_ASSETS_BASE_URL}/usblsafe-3372h.bin" "${tools_dir}/usblsafe-3372h.bin"
+  download_asset "${FLASH_ASSETS_BASE_URL}/E3372h-153_Update_21.329.62.00.209.bin" "${images_dir}/E3372h-153_Update_21.329.62.00.209.bin"
   download_asset "${FLASH_ASSETS_BASE_URL}/E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin" "${images_dir}/E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin"
   download_asset "${FLASH_ASSETS_BASE_URL}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin" "${images_dir}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin"
   download_asset "${FLASH_ASSETS_BASE_URL}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin" "${images_dir}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin"
