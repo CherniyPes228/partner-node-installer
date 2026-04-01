@@ -48,6 +48,7 @@ SPEEDTEST_URL = os.environ.get("PARTNER_SPEEDTEST_URL", "http://speedtest.tele2.
 SPEEDTEST_BYTES = int(os.environ.get("PARTNER_SPEEDTEST_BYTES", "2000000"))
 MODEM_ALIAS_PREFIX = os.environ.get("MODEM_ALIAS_PREFIX", "172.31")
 MODEM_ALIAS_PORT = int(os.environ.get("MODEM_ALIAS_PORT", "80"))
+CONFIG_PATH = os.environ.get("PARTNER_NODE_CONFIG", "/etc/partner-node/config.yaml")
 
 ALLOWED = {
     "self_check",
@@ -138,6 +139,37 @@ def reconcile_aliases(overview):
         alias_host = alias_host_for_ordinal(modem.get("ordinal") or modem.get("modem_number"))
         if alias_host:
             ensure_alias_ip(alias_host)
+
+
+def read_flash_settings():
+    enabled = True
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
+            content = fh.read()
+        match = re.search(r'(?ms)^modem:\n(?:(?:  .*\n)+?)  flash:\n(?:(?:    .*\n)+?)    auto_enabled:\s*(true|false)\s*$', content)
+        if not match:
+            match = re.search(r'(?m)^\s*auto_enabled:\s*(true|false)\s*$', content)
+        if match:
+            enabled = match.group(1).strip().lower() == "true"
+    except Exception:
+        enabled = True
+    return {"auto_flash_enabled": enabled}
+
+
+def write_flash_settings(auto_enabled):
+    with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
+        content = fh.read()
+    replacement = f"    auto_enabled: {'true' if auto_enabled else 'false'}"
+    if re.search(r'(?m)^\s*auto_enabled:\s*(true|false)\s*$', content):
+        updated = re.sub(r'(?m)^\s*auto_enabled:\s*(true|false)\s*$', replacement, content, count=1)
+    elif "  flash:\n" in content:
+        updated = content.replace("  flash:\n", f"  flash:\n{replacement}\n", 1)
+    else:
+        updated = content.rstrip() + f"\n  flash:\n    enabled: true\n{replacement}\n    script_path: \"/usr/local/sbin/partner-node-flash-e3372h.sh\"\n"
+    with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
+        fh.write(updated)
+    subprocess.Popen(["systemctl", "restart", "partner-node"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return {"auto_flash_enabled": auto_enabled, "restarting_agent": True}
 
 
 def fetch_overview():
@@ -368,6 +400,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_text(502, str(err))
             return
 
+        if self.path == "/api/flash-settings":
+            try:
+                self._send_json(200, read_flash_settings())
+            except Exception as err:
+                self._send_text(500, str(err))
+            return
+
         if self.path.startswith("/api/speedtest-template"):
             self._send_json(200, {
                 "target_url": SPEEDTEST_URL,
@@ -450,6 +489,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, data)
             except urllib.error.HTTPError as err:
                 self._send_text(err.code, err.read().decode("utf-8", errors="ignore"))
+            except Exception as err:
+                self._send_text(400, str(err))
+            return
+
+        if self.path == "/api/flash-settings":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                raw = self.rfile.read(length) if length > 0 else b"{}"
+                req = json.loads(raw.decode("utf-8"))
+                auto_enabled = bool(req.get("auto_flash_enabled", True))
+                self._send_json(200, write_flash_settings(auto_enabled))
             except Exception as err:
                 self._send_text(400, str(err))
             return

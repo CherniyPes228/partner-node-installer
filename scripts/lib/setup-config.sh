@@ -76,6 +76,7 @@ modem:
     timeout: "$HILINK_TIMEOUT"
   flash:
     enabled: $MODEM_FLASH_ENABLED
+    auto_enabled: true
     script_path: "$MODEM_FLASH_SCRIPT_PATH"
 
 proxy:

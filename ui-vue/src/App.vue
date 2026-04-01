@@ -50,6 +50,10 @@ const registryMessage = ref("")
 const billingSaving = ref("")
 const registrySaving = ref("")
 const simChecking = ref("")
+const flashSettings = ref({ auto_flash_enabled: true })
+const flashSettingsLoading = ref(false)
+const flashSettingsSaving = ref(false)
+const flashSettingsMessage = ref("")
 const flashOverlay = ref({
   open: false,
   status: "",
@@ -355,6 +359,42 @@ async function loadModemBilling() {
   }
 }
 
+async function loadFlashSettings() {
+  flashSettingsLoading.value = true
+  try {
+    const response = await fetch("/api/flash-settings", { cache: "no-store" })
+    if (!response.ok) throw new Error(await response.text())
+    flashSettings.value = await response.json()
+  } catch (error) {
+    flashSettingsMessage.value = error instanceof Error ? error.message : "flash settings refresh failed"
+  } finally {
+    flashSettingsLoading.value = false
+  }
+}
+
+async function toggleAutoFlash() {
+  flashSettingsSaving.value = true
+  flashSettingsMessage.value = ""
+  const nextValue = !flashSettings.value.auto_flash_enabled
+  try {
+    const response = await fetch("/api/flash-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ auto_flash_enabled: nextValue }),
+    })
+    if (!response.ok) throw new Error(await response.text())
+    flashSettings.value = await response.json()
+    flashSettingsMessage.value = nextValue
+      ? "Auto-flash enabled. Agent is restarting."
+      : "Auto-flash disabled. Agent is restarting."
+    await loadOverview(false)
+  } catch (error) {
+    flashSettingsMessage.value = error instanceof Error ? error.message : "failed to update flash settings"
+  } finally {
+    flashSettingsSaving.value = false
+  }
+}
+
 function buildCommandPayload(type) {
   const payload = { type, timeout_sec: Number(timeoutSec.value || 120), params: {} }
   if (activeNodeId.value) payload.node_id = activeNodeId.value
@@ -570,7 +610,13 @@ async function flashLiveModem(modem) {
 function quickAction(type) { sendCommand(type, "quick") }
 watch(selectedNode, () => { if (!filteredModems.value.some((item) => item.id === selectedModem.value)) selectedModem.value = "all" })
 watch([modems, overview], () => { syncFlashOverlayFromOverview() }, { deep: true })
-onMounted(() => { loadOverview(); fallbackTimer = window.setInterval(() => { if (realtimeState.value !== "active") loadOverview(false) }, 15000) })
+onMounted(() => {
+  loadOverview()
+  loadFlashSettings()
+  fallbackTimer = window.setInterval(() => {
+    if (realtimeState.value !== "active") loadOverview(false)
+  }, 15000)
+})
 onBeforeUnmount(() => { closeRealtime(); clearRefreshTimer(); if (fallbackTimer) { window.clearInterval(fallbackTimer); fallbackTimer = null } })
 </script>
 <template>
@@ -639,7 +685,81 @@ onBeforeUnmount(() => { closeRealtime(); clearRefreshTimer(); if (fallbackTimer)
               <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><CardTitle class="text-2xl">Provisioning registry</CardTitle><CardDescription>Every modem gets a stable number by IMEI, so you can label the hardware and keep tracking it after moving to another USB port.</CardDescription></CardHeader><CardContent class="space-y-4 p-4 sm:p-6"><div v-if="registryMessage" class="rounded-xl border border-border/70 bg-muted/50 px-3 py-2 text-sm">{{ registryMessage }}</div><div v-for="item in modemRegistry" :key="item.imei" class="rounded-[24px] border border-border/70 p-4 space-y-3"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="flex flex-wrap items-center gap-2"><div class="font-medium">Modem #{{ item.modem_number }}</div><Badge :variant="item.provision_status === 'ready' ? 'secondary' : item.provision_status === 'requires_flash' ? 'destructive' : 'outline'" class="rounded-full">{{ item.provision_status || "new" }}</Badge></div><div class="mt-1 font-mono text-xs text-muted-foreground">{{ item.imei }}</div><div class="mt-1 text-xs text-muted-foreground">{{ item.device_name || "-" }} • {{ item.hardware_version || "-" }}</div><div class="mt-1 text-xs text-muted-foreground">{{ item.software_version || "-" }} • {{ item.webui_version || "-" }}</div></div><div class="text-right text-xs text-muted-foreground"><div>{{ item.last_seen_node_id || "-" }} • {{ item.last_seen_modem_id || "-" }}</div><div>{{ relativeTime(item.last_seen_at) }}</div></div></div><div class="rounded-xl border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">Safe flash is limited to supported E3372h-153 baselines from the approved firmware list. Unknown revisions stay blocked.</div><div class="flex flex-wrap gap-3"><Button variant="outline" class="rounded-full" :disabled="registrySaving === item.imei" @click="updateModemRegistry(item, 'ready')">Mark ready</Button><Button variant="secondary" class="rounded-full" :disabled="registrySaving === item.imei" @click="updateModemRegistry(item, 'requires_flash')">Needs flash</Button><Button v-if="item.provision_status === 'requires_flash'" variant="destructive" class="rounded-full" :disabled="registrySaving === item.imei || !item.last_seen_node_id || !item.last_seen_modem_id" @click="flashRegistryModem(item)">Flash now</Button></div></div><div v-if="!modemRegistry.length" class="rounded-[24px] border border-dashed border-border/70 px-4 py-10 text-center text-sm text-muted-foreground">No provisioned modems yet. Plug them one by one to assign a stable modem number.</div></CardContent></Card>
               <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><CardTitle class="text-2xl">SIM package controls</CardTitle><CardDescription>Per-modem traffic package, SIM health status, auto reset day, and manual reset of the current billing cycle.</CardDescription></CardHeader><CardContent class="space-y-4 p-4 sm:p-6"><div v-if="simCheckRequiredCount" class="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{{ simCheckRequiredCount }} SIM card(s) are blocked from client traffic until you verify them on a healthy modem.</div><div v-if="billingMessage" class="rounded-xl border border-border/70 bg-muted/50 px-3 py-2 text-sm">{{ billingMessage }}</div><div v-for="item in modemBilling" :key="`${item.node_id}:${item.modem_id}`" class="rounded-[24px] border border-border/70 p-4 space-y-3"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="flex flex-wrap items-center gap-2"><div class="font-medium">#{{ localModemNumber({ node_id: item.node_id, id: item.modem_id, ordinal: item.modem_ordinal }) }} • {{ item.modem_id }}</div><Badge v-if="registryByModemKey[`${item.node_id}:${item.modem_id}`]?.provision_status" :variant="registryByModemKey[`${item.node_id}:${item.modem_id}`]?.provision_status === 'ready' ? 'secondary' : registryByModemKey[`${item.node_id}:${item.modem_id}`]?.provision_status === 'requires_flash' ? 'destructive' : 'outline'" class="rounded-full">{{ registryByModemKey[`${item.node_id}:${item.modem_id}`]?.provision_status }}</Badge><Badge v-if="item.sim_needs_check || item.sim_quarantined" variant="destructive" class="rounded-full">Blocked for clients</Badge><Badge v-else variant="secondary" class="rounded-full">SIM healthy</Badge></div><div class="text-xs text-muted-foreground">{{ item.node_id }} • ICCID {{ item.iccid || "-" }} • cycle used {{ bytesLabel(item.cycle_used_bytes) }}<span v-if="item.next_reset_at"> • next reset {{ relativeTime(item.next_reset_at) }}</span></div><div v-if="item.sim_quarantine_note" class="mt-1 text-xs text-destructive">{{ item.sim_quarantine_note }}</div></div><div class="text-right text-xs text-muted-foreground"><div>Started {{ relativeTime(item.cycle_start_at) }}</div><div v-if="item.remaining_bytes != null">Left {{ bytesLabel(item.remaining_bytes) }}</div><div v-if="item.sim_last_checked_at">Checked {{ relativeTime(item.sim_last_checked_at) }}</div></div></div><div class="grid gap-3 md:grid-cols-4"><div class="space-y-2"><div class="text-sm font-medium">Plan</div><Select v-model="item.plan_kind"><SelectTrigger class="rounded-2xl"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="metered">Metered</SelectItem><SelectItem value="unlimited">Unlimited</SelectItem></SelectContent></Select></div><div class="space-y-2"><div class="text-sm font-medium">Limit GB</div><Input v-model="item.traffic_limit_gb" :disabled="item.plan_kind === 'unlimited'" class="rounded-2xl" type="number" min="0" step="0.1" /></div><div class="space-y-2"><div class="text-sm font-medium">Auto reset day</div><Input v-model="item.auto_reset_day" class="rounded-2xl" type="number" min="1" max="28" placeholder="2" /></div><div class="space-y-2"><div class="text-sm font-medium">Notes</div><Input v-model="item.notes" class="rounded-2xl" placeholder="SIM tariff note" /></div></div><div class="grid gap-2 text-xs text-muted-foreground md:grid-cols-3"><div class="rounded-xl border border-border/70 p-3"><div class="font-medium text-foreground">ICCID</div><div class="mt-1 font-mono">{{ item.iccid || "-" }}</div></div><div class="rounded-xl border border-border/70 p-3"><div class="font-medium text-foreground">Degraded / 24h</div><div class="mt-1">{{ item.sim_degraded_events_24h || 0 }}</div></div><div class="rounded-xl border border-border/70 p-3"><div class="font-medium text-foreground">Client status</div><div class="mt-1">{{ item.sim_needs_check || item.sim_quarantined ? "blocked" : "eligible" }}</div></div></div><div class="flex flex-wrap gap-3"><Button class="rounded-full" :disabled="billingSaving === `${item.node_id}:${item.modem_id}`" @click="saveBilling(item)">{{ billingSaving === `${item.node_id}:${item.modem_id}` ? 'Saving...' : 'Save' }}</Button><Button variant="outline" class="rounded-full" :disabled="billingSaving === `${item.node_id}:${item.modem_id}`" @click="resetBilling(item)">Manual reset</Button><Button variant="secondary" class="rounded-full" :disabled="simChecking === `${item.node_id}:${item.modem_id}` || !(item.sim_needs_check || item.sim_quarantined)" @click="verifySim(item)">{{ simChecking === `${item.node_id}:${item.modem_id}` ? 'Checking...' : 'Verify SIM' }}</Button></div></div><div v-if="!modemBilling.length" class="rounded-[24px] border border-dashed border-border/70 px-4 py-10 text-center text-sm text-muted-foreground">No modem billing data yet.</div></CardContent></Card>
             </div>
-            <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><CardTitle class="text-2xl">Fleet summary</CardTitle><CardDescription>Health, speed, and local proxy diagnostics.</CardDescription></CardHeader><CardContent class="space-y-3 p-4 sm:p-6"><div class="rounded-2xl border border-border/70 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Ready modems</div><div class="mt-2 text-2xl font-semibold">{{ summary.modems_ready || 0 }}</div></div><div class="rounded-2xl border border-border/70 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Month accrual</div><div class="mt-2 text-2xl font-semibold">${{ Number(partnerBalance.current_month_earned_usd || 0).toFixed(2) }}</div></div><div class="rounded-2xl border border-border/70 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Last heartbeat</div><div class="mt-2 text-sm font-medium">{{ relativeTime(overview?.last_heartbeat_at) }}</div></div><div class="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100"><div class="flex items-center gap-2 font-medium text-amber-200"><TriangleAlert class="h-4 w-4" />Important check</div><div class="mt-2 leading-6">If a modem observed IP does not match what a client sees through the proxy, the issue is in local egress or policy routing, not in the main server.</div></div><div class="rounded-2xl border border-border/70 p-4 space-y-3"><div class="flex items-center justify-between gap-3"><div><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Local modem speed test</div><div class="mt-1 text-sm text-muted-foreground">Runs directly on the node through the selected modem port. You can choose any endpoint or enter a custom URL.</div></div><Button variant="outline" class="rounded-full" :disabled="localSpeedTestLoading || selectedModem === 'all'" @click="runLocalSpeedTest()"><Play class="mr-2 h-4 w-4" />{{ localSpeedTestLoading ? "Testing..." : "Run test" }}</Button></div><div class="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)]"><div class="space-y-2"><div class="text-sm font-medium">Service</div><Select v-model="speedTestTarget"><SelectTrigger class="rounded-2xl"><SelectValue placeholder="Choose service" /></SelectTrigger><SelectContent><SelectItem v-for="item in speedTestTargets" :key="item.value" :value="item.value">{{ item.label }}</SelectItem></SelectContent></Select></div><div v-if="speedTestTarget === 'custom'" class="space-y-2"><div class="text-sm font-medium">Custom URL</div><Input v-model="speedTestCustomUrl" class="rounded-2xl" placeholder="https://example.com/test.bin" /></div></div><div class="text-xs text-muted-foreground">Select a modem in the command center first. For Cloudflare-style endpoints the `bytes` query is added automatically if needed.</div><div v-if="localSpeedTestError" class="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{{ localSpeedTestError }}</div><div v-if="localSpeedTest" class="rounded-xl border border-border/70 bg-muted/40 p-3 text-sm space-y-2"><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Download</span><span class="font-semibold">{{ localSpeedTest.download_mbps }} Mbps</span></div><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Transferred</span><span>{{ bytesLabel(localSpeedTest.bytes_received) }}</span></div><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Duration</span><span>{{ localSpeedTest.duration_ms }} ms</span></div><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Remote IP</span><span class="font-mono text-xs">{{ localSpeedTest.remote_ip || "-" }}</span></div><div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">URL</span><span class="max-w-[220px] truncate text-right font-mono text-xs">{{ localSpeedTest.target_url || "-" }}</span></div></div></div></CardContent></Card>
+            <Card class="rounded-[28px] border-border/70 shadow-sm">
+              <CardHeader class="border-b border-border/60 pb-5">
+                <CardTitle class="text-2xl">Fleet summary</CardTitle>
+                <CardDescription>Health, speed, local proxy diagnostics, and flash controls.</CardDescription>
+              </CardHeader>
+              <CardContent class="space-y-3 p-4 sm:p-6">
+                <div class="rounded-2xl border border-border/70 p-4">
+                  <div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Ready modems</div>
+                  <div class="mt-2 text-2xl font-semibold">{{ summary.modems_ready || 0 }}</div>
+                </div>
+                <div class="rounded-2xl border border-border/70 p-4">
+                  <div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Month accrual</div>
+                  <div class="mt-2 text-2xl font-semibold">${{ Number(partnerBalance.current_month_earned_usd || 0).toFixed(2) }}</div>
+                </div>
+                <div class="rounded-2xl border border-border/70 p-4">
+                  <div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Last heartbeat</div>
+                  <div class="mt-2 text-sm font-medium">{{ relativeTime(overview?.last_heartbeat_at) }}</div>
+                </div>
+                <div class="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-100">
+                  <div class="flex items-center gap-2 font-medium text-amber-200"><TriangleAlert class="h-4 w-4" />Important check</div>
+                  <div class="mt-2 leading-6">If a modem observed IP does not match what a client sees through the proxy, the issue is in local egress or policy routing, not in the main server.</div>
+                </div>
+                <div class="rounded-2xl border border-border/70 p-4 space-y-3">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Auto-flash</div>
+                      <div class="mt-1 text-sm text-muted-foreground">Disable this before manual recovery or low-level modem work. Manual <span class="font-medium text-foreground">Flash now</span> stays available.</div>
+                    </div>
+                    <Button
+                      :variant="flashSettings.auto_flash_enabled ? 'default' : 'outline'"
+                      class="rounded-full"
+                      :disabled="flashSettingsLoading || flashSettingsSaving"
+                      @click="toggleAutoFlash()"
+                    >
+                      {{ flashSettingsSaving ? "Applying..." : flashSettings.auto_flash_enabled ? "Auto-flash ON" : "Auto-flash OFF" }}
+                    </Button>
+                  </div>
+                  <div class="text-xs text-muted-foreground">
+                    Current mode: {{ flashSettings.auto_flash_enabled ? "new modems may start provisioning automatically" : "automatic provisioning is paused" }}
+                  </div>
+                  <div v-if="flashSettingsMessage" class="rounded-xl border border-border/70 bg-muted/50 px-3 py-2 text-sm">{{ flashSettingsMessage }}</div>
+                </div>
+                <div class="rounded-2xl border border-border/70 p-4 space-y-3">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Local modem speed test</div>
+                      <div class="mt-1 text-sm text-muted-foreground">Runs directly on the node through the selected modem port. You can choose any endpoint or enter a custom URL.</div>
+                    </div>
+                    <Button variant="outline" class="rounded-full" :disabled="localSpeedTestLoading || selectedModem === 'all'" @click="runLocalSpeedTest()"><Play class="mr-2 h-4 w-4" />{{ localSpeedTestLoading ? "Testing..." : "Run test" }}</Button>
+                  </div>
+                  <div class="grid gap-3 md:grid-cols-[220px_minmax(0,1fr)]">
+                    <div class="space-y-2">
+                      <div class="text-sm font-medium">Service</div>
+                      <Select v-model="speedTestTarget">
+                        <SelectTrigger class="rounded-2xl"><SelectValue placeholder="Choose service" /></SelectTrigger>
+                        <SelectContent><SelectItem v-for="item in speedTestTargets" :key="item.value" :value="item.value">{{ item.label }}</SelectItem></SelectContent>
+                      </Select>
+                    </div>
+                    <div v-if="speedTestTarget === 'custom'" class="space-y-2">
+                      <div class="text-sm font-medium">Custom URL</div>
+                      <Input v-model="speedTestCustomUrl" class="rounded-2xl" placeholder="https://example.com/test.bin" />
+                    </div>
+                  </div>
+                  <div class="text-xs text-muted-foreground">Select a modem in the command center first. For Cloudflare-style endpoints the `bytes` query is added automatically if needed.</div>
+                  <div v-if="localSpeedTestError" class="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{{ localSpeedTestError }}</div>
+                  <div v-if="localSpeedTest" class="rounded-xl border border-border/70 bg-muted/40 p-3 text-sm space-y-2">
+                    <div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Download</span><span class="font-semibold">{{ localSpeedTest.download_mbps }} Mbps</span></div>
+                    <div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Transferred</span><span>{{ bytesLabel(localSpeedTest.bytes_received) }}</span></div>
+                    <div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Duration</span><span>{{ localSpeedTest.duration_ms }} ms</span></div>
+                    <div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">Remote IP</span><span class="font-mono text-xs">{{ localSpeedTest.remote_ip || "-" }}</span></div>
+                    <div class="flex items-center justify-between gap-3"><span class="text-muted-foreground">URL</span><span class="max-w-[220px] truncate text-right font-mono text-xs">{{ localSpeedTest.target_url || "-" }}</span></div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
           </div>
         </TabsContent>
 
