@@ -1018,6 +1018,13 @@ TARGET_WEBUI_PACKAGE_LABEL="${TARGET_WEBUI_PACKAGE_LABEL:-17.100.13.01.03}"
 RECOVERY_TARGET_WEBUI_VERSION_209="${RECOVERY_TARGET_WEBUI_VERSION_209:-17.100.18.03.143}"
 FLASH_PREFER_HILINK_LOCAL_UPDATE="${FLASH_PREFER_HILINK_LOCAL_UPDATE:-false}"
 
+flash_recovery_webui_209() {
+  local port="${1:-}"
+  BALONG_FORCE_DATAMODE=1 \
+  BALONG_RELAX_DATAMODE=1 \
+  "$BALONG_FLASH" -p "$port" -gd "$RECOVERY_WEBUI_IMAGE_209"
+}
+
 find_huawei_pid() {
   lsusb | awk 'tolower($0) ~ /12d1:/ { for (i=1; i<=NF; ++i) if ($i ~ /^[0-9a-fA-F]{4}:[0-9a-fA-F]{4}$/) { split(tolower($i), a, ":"); pid=a[2]; if (pid=="1f01" || pid=="14dc" || pid=="1442" || pid=="1443" || pid=="1506" || pid=="14db" || pid=="1505" || pid=="10c6" || pid=="1c05" || pid=="1c20") { print pid; exit } } }'
 }
@@ -1458,7 +1465,7 @@ if [[ "${USE_209_RECOVERY_CHAIN}" == "true" ]]; then
   fi
 
   echo "STAGE:flash_webui_209"
-  "$BALONG_FLASH" -p "$PORT" "$RECOVERY_WEBUI_IMAGE_209"
+  flash_recovery_webui_209 "$PORT"
 
   PORT="$(wait_for_port_reconnect "$PORT" 90 || true)"
   if [[ -n "${PORT}" && -e "${PORT}" ]]; then
@@ -1565,7 +1572,7 @@ if [[ -z "${PORT}" || ! -e "${PORT}" ]]; then
 fi
 if [[ "${USE_209_RECOVERY_CHAIN}" == "true" ]]; then
   echo "STAGE:flash_webui_209"
-  "$BALONG_FLASH" -p "$PORT" "$RECOVERY_WEBUI_IMAGE_209"
+  flash_recovery_webui_209 "$PORT"
 else
   echo "STAGE:flash_webui"
   "$BALONG_FLASH" -p "$PORT" "$WEBUI_IMAGE"
