@@ -1006,12 +1006,16 @@ BALONG_USBLOAD="${BALONG_USBLOAD:-${TOOLS_DIR}/balong-usbload}"
 BALONG_FLASH="${BALONG_FLASH:-${TOOLS_DIR}/balong_flash}"
 USBLOADER="${USBLOADER:-${TOOLS_DIR}/usbloader-3372h.bin}"
 USBLSAFE="${USBLSAFE:-${TOOLS_DIR}/usblsafe-3372h.bin}"
+RECOVERY_IMAGE="${RECOVERY_IMAGE:-${IMAGES_DIR}/E3372h-153_Update_21.329.62.00.209.bin}"
 INTERMEDIATE_IMAGE="${INTERMEDIATE_IMAGE:-${IMAGES_DIR}/E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin}"
 MAIN_IMAGE="${MAIN_IMAGE:-${IMAGES_DIR}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin}"
 WEBUI_IMAGE="${WEBUI_IMAGE:-${IMAGES_DIR}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin}"
+RECOVERY_MAIN_IMAGE_209="${RECOVERY_MAIN_IMAGE_209:-${IMAGES_DIR}/E3372h-153_Update_22.333.63.00.209_to_00.raw.bin}"
+RECOVERY_WEBUI_IMAGE_209="${RECOVERY_WEBUI_IMAGE_209:-${IMAGES_DIR}/WEBUI_17.100.18.03.143_HILINK_Mod1.21_BV7R11HS_CPIO.bin}"
 TARGET_MAIN_VERSION="${TARGET_MAIN_VERSION:-22.333.01.00.00}"
 TARGET_WEBUI_VERSION="${TARGET_WEBUI_VERSION:-17.100.13.113.03}"
 TARGET_WEBUI_PACKAGE_LABEL="${TARGET_WEBUI_PACKAGE_LABEL:-17.100.13.01.03}"
+RECOVERY_TARGET_WEBUI_VERSION_209="${RECOVERY_TARGET_WEBUI_VERSION_209:-17.100.18.03.143}"
 FLASH_PREFER_HILINK_LOCAL_UPDATE="${FLASH_PREFER_HILINK_LOCAL_UPDATE:-false}"
 
 find_huawei_pid() {
@@ -1299,6 +1303,11 @@ current_webui_version() {
   serial_at "${port}" "AT^VERSION?" 2>/dev/null | sed -n 's/.*\^VERSION:EXTD:\(.*\)$/\1/p' | head -n 1
 }
 
+current_main_version() {
+  local port="${1:-}"
+  serial_at "${port}" "AT^VERSION?" 2>/dev/null | sed -n 's/.*\^VERSION:EXTS:\(.*\)$/\1/p' | head -n 1
+}
+
 read_hilink_device_info() {
   local base="${1:-}"
   local cookiejar
@@ -1324,6 +1333,8 @@ read_hilink_device_info() {
 
 verify_target_versions() {
   local base="${1:-}"
+  local expected_webui="${2:-${TARGET_WEBUI_VERSION}}"
+  local expected_label="${3:-${TARGET_WEBUI_PACKAGE_LABEL}}"
   local xml
   local fw
   local webui
@@ -1339,8 +1350,8 @@ verify_target_versions() {
     echo "ERROR:unexpected firmware version ${fw}, expected ${TARGET_MAIN_VERSION}"
     return 1
   }
-  [[ "${webui}" == "${TARGET_WEBUI_VERSION}"* || "${webui}" == *"${TARGET_WEBUI_PACKAGE_LABEL}"* ]] || {
-    echo "ERROR:unexpected webui version ${webui}, expected ${TARGET_WEBUI_VERSION} (${TARGET_WEBUI_PACKAGE_LABEL})"
+  [[ "${webui}" == "${expected_webui}"* || "${webui}" == *"${expected_label}"* ]] || {
+    echo "ERROR:unexpected webui version ${webui}, expected ${expected_webui} (${expected_label})"
     return 1
   }
 }
@@ -1402,7 +1413,7 @@ maybe_bind_option_driver() {
 }
 
 echo "STAGE:precheck"
-for f in "$BALONG_USBLOAD" "$BALONG_FLASH" "$USBLOADER" "$USBLSAFE" "$INTERMEDIATE_IMAGE" "$MAIN_IMAGE" "$WEBUI_IMAGE"; do
+for f in "$BALONG_USBLOAD" "$BALONG_FLASH" "$USBLOADER" "$USBLSAFE" "$RECOVERY_IMAGE" "$INTERMEDIATE_IMAGE" "$MAIN_IMAGE" "$WEBUI_IMAGE" "$RECOVERY_MAIN_IMAGE_209" "$RECOVERY_WEBUI_IMAGE_209"; do
   if [[ ! -f "$f" ]]; then
     echo "ERROR:missing file $f"
     exit 2
@@ -1458,24 +1469,47 @@ echo "STAGE:usbload"
 "$BALONG_USBLOAD" -p "$PORT" "$USBLOADER"
 echo "STAGE:safe_loader"
 "$BALONG_FLASH" -p "$PORT" "$USBLSAFE"
-echo "STAGE:flash_intermediate"
-"$BALONG_FLASH" -p "$PORT" "$INTERMEDIATE_IMAGE"
-echo "STAGE:wait_reconnect_after_intermediate"
+echo "STAGE:flash_recovery"
+"$BALONG_FLASH" -p "$PORT" "$RECOVERY_IMAGE"
+echo "STAGE:wait_reconnect_after_recovery"
 PORT="$(wait_for_port_reconnect "$PORT" 120 || true)"
 if [[ -z "${PORT}" || ! -e "${PORT}" ]]; then
-  echo "ERROR:flash serial port not found after intermediate reboot"
+  echo "ERROR:flash serial port not found after recovery firmware reboot"
   exit 5
 fi
-echo "STAGE:flash_main"
-"$BALONG_FLASH" -p "$PORT" "$MAIN_IMAGE"
+CURRENT_MAIN="$(current_main_version "$PORT" | tr -d '\r\n\t ')"
+USE_209_RECOVERY_CHAIN=false
+if [[ "${CURRENT_MAIN}" == 21.329.62.00.209* ]]; then
+  USE_209_RECOVERY_CHAIN=true
+fi
+if [[ "${USE_209_RECOVERY_CHAIN}" == "true" ]]; then
+  echo "STAGE:flash_main_209"
+  "$BALONG_FLASH" -p "$PORT" "$RECOVERY_MAIN_IMAGE_209"
+else
+  echo "STAGE:flash_intermediate"
+  "$BALONG_FLASH" -p "$PORT" "$INTERMEDIATE_IMAGE"
+  echo "STAGE:wait_reconnect_after_intermediate"
+  PORT="$(wait_for_port_reconnect "$PORT" 120 || true)"
+  if [[ -z "${PORT}" || ! -e "${PORT}" ]]; then
+    echo "ERROR:flash serial port not found after intermediate reboot"
+    exit 5
+  fi
+  echo "STAGE:flash_main"
+  "$BALONG_FLASH" -p "$PORT" "$MAIN_IMAGE"
+fi
 echo "STAGE:wait_reconnect_after_main"
 PORT="$(wait_for_port_reconnect "$PORT" 120 || true)"
 if [[ -z "${PORT}" || ! -e "${PORT}" ]]; then
   echo "ERROR:flash serial port not found after main firmware reboot"
   exit 5
 fi
-echo "STAGE:flash_webui"
-"$BALONG_FLASH" -p "$PORT" "$WEBUI_IMAGE"
+if [[ "${USE_209_RECOVERY_CHAIN}" == "true" ]]; then
+  echo "STAGE:flash_webui_209"
+  "$BALONG_FLASH" -p "$PORT" "$RECOVERY_WEBUI_IMAGE_209"
+else
+  echo "STAGE:flash_webui"
+  "$BALONG_FLASH" -p "$PORT" "$WEBUI_IMAGE"
+fi
 PORT="$(wait_for_port_reconnect "$PORT" 90 || true)"
 if [[ -n "${PORT}" && -e "${PORT}" ]]; then
   switch_to_hilink_composition "$PORT" || true
@@ -1496,7 +1530,11 @@ if reset_userdata_via_telnet "${HILINK_BASE}"; then
   fi
 fi
 echo "STAGE:verify"
-verify_target_versions "${HILINK_BASE}" || exit 7
+if [[ "${USE_209_RECOVERY_CHAIN}" == "true" ]]; then
+  verify_target_versions "${HILINK_BASE}" "${RECOVERY_TARGET_WEBUI_VERSION_209}" "${RECOVERY_TARGET_WEBUI_VERSION_209}" || exit 7
+else
+  verify_target_versions "${HILINK_BASE}" || exit 7
+fi
 echo "modem_id=${MODEM_ID} ordinal=${ORDINAL} port=${PORT} base=${HILINK_BASE}"
 echo "STAGE:completed"
 EOF
@@ -1538,9 +1576,12 @@ install_flash_assets() {
   download_asset "${base}/usbloader-3372h.bin" "${tools}/usbloader-3372h.bin"
   download_asset "${base}/usblsafe-3372h.bin" "${tools}/usblsafe-3372h.bin"
 
+  download_asset "${base}/E3372h-153_Update_21.329.62.00.209.bin" "${images}/E3372h-153_Update_21.329.62.00.209.bin"
   download_asset "${base}/E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin" "${images}/E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin"
   download_asset "${base}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin" "${images}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin"
   download_asset "${base}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin" "${images}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin"
+  download_asset "${base}/E3372h-153_Update_22.333.63.00.209_to_00.raw.bin" "${images}/E3372h-153_Update_22.333.63.00.209_to_00.raw.bin"
+  download_asset "${base}/WEBUI_17.100.18.03.143_HILINK_Mod1.21_BV7R11HS_CPIO.bin" "${images}/WEBUI_17.100.18.03.143_HILINK_Mod1.21_BV7R11HS_CPIO.bin"
 
   if [[ "${failures}" -gt 0 ]]; then
     log_warn "Modem flash assets are incomplete (${failures} failed downloads); disabling modem flash."
