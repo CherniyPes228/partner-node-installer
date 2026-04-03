@@ -12,6 +12,8 @@ FLASH_ASSETS_BASE_URL="${FLASH_ASSETS_BASE_URL:-https://chatmod.warforgalaxy.com
 FLASH_ASSETS_FALLBACK_BASE_URL="${FLASH_ASSETS_FALLBACK_BASE_URL:-https://raw.githubusercontent.com/CherniyPes228/moderation_chat/main/public/downloads/partner-node/flash}"
 FLASH_ROOT="${FLASH_ROOT:-/opt/partner-node-flash}"
 FLASH_SCRIPT_PATH="${MODEM_FLASH_SCRIPT_PATH:-/usr/local/sbin/partner-node-flash-e3372h.sh}"
+MANUAL_RECOVERY_PATH="${MODEM_NEEDLE_RECOVERY_PATH:-/usr/local/sbin/recover-e3372h-clean}"
+PARTNER_NODE_RAW_BASE_URL="${PARTNER_NODE_RAW_BASE_URL:-https://raw.githubusercontent.com/CherniyPes228/partner-node/main}"
 
 write_flash_script() {
   cat > "${FLASH_SCRIPT_PATH}" <<'EOF'
@@ -640,6 +642,41 @@ EOF
   chmod 0755 "${FLASH_SCRIPT_PATH}"
 }
 
+write_manual_recovery_wrapper() {
+  cat > "${MANUAL_RECOVERY_PATH}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT="${FLASH_ROOT:-/opt/partner-node-flash}/recovery/recover_e3372h_clean.py"
+if [[ ! -f "${SCRIPT}" ]]; then
+  echo "ERROR: missing recovery script ${SCRIPT}" >&2
+  exit 1
+fi
+
+exec python3 "${SCRIPT}" "$@"
+EOF
+  chmod 0755 "${MANUAL_RECOVERY_PATH}"
+}
+
+install_manual_recovery() {
+  local recovery_dir tools_dir
+  recovery_dir="${FLASH_ROOT}/recovery"
+  tools_dir="${FLASH_ROOT}/tools"
+  mkdir -p "${recovery_dir}" "${tools_dir}" "$(dirname "${MANUAL_RECOVERY_PATH}")"
+
+  log_info "Installing manual needle recovery helper"
+  download_asset "${PARTNER_NODE_RAW_BASE_URL}/scripts/recover_e3372h_clean.py" "${recovery_dir}/recover_e3372h_clean.py"
+  download_asset "${PARTNER_NODE_RAW_BASE_URL}/scripts/recover_e3372h_from_needle.py" "${recovery_dir}/recover_e3372h_from_needle.py"
+  download_asset "${PARTNER_NODE_RAW_BASE_URL}/scripts/assets/ptable-hilink.bin" "${tools_dir}/ptable-hilink.bin"
+  download_asset "${PARTNER_NODE_RAW_BASE_URL}/scripts/assets/balong_flash_recover_linux_amd64" "${tools_dir}/balong_flash_recover"
+  download_asset "${PARTNER_NODE_RAW_BASE_URL}/scripts/assets/rawfbcmd_linux_amd64" "${tools_dir}/rawfbcmd"
+
+  chmod 0644 "${recovery_dir}/recover_e3372h_clean.py" "${recovery_dir}/recover_e3372h_from_needle.py" "${tools_dir}/ptable-hilink.bin" || true
+  chmod 0755 "${tools_dir}/balong_flash_recover" "${tools_dir}/rawfbcmd" || true
+  write_manual_recovery_wrapper
+  log_info "Manual needle recovery command installed: ${MANUAL_RECOVERY_PATH}"
+}
+
 download_asset() {
   local url="$1"
   local out="$2"
@@ -699,6 +736,7 @@ setup_flash() {
   chmod 0644 "${tools_dir}/usbloader-3372h.bin" "${tools_dir}/usblsafe-3372h.bin" || true
   chmod 0644 "${images_dir}/"*.bin || true
   write_flash_script
+  install_manual_recovery
   log_info "Safe flash assets are installed into ${FLASH_ROOT}"
   log_info "✅ Flash setup complete"
 }
