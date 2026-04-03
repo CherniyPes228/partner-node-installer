@@ -206,13 +206,48 @@ def run_phase(args: argparse.Namespace, phase: str) -> int:
     return completed.returncode
 
 
+def run_all(args: argparse.Namespace) -> int:
+    state_file = args.state_file or default_state_file()
+    state = read_state(state_file)
+    phase = state.get("phase")
+
+    if phase == "webui_done":
+        log("Recovery already completed.")
+        return 0
+
+    if phase == "main_done":
+        log("Continuing recovery from saved state: webui phase.")
+        rc = run_phase(args, "article-flow")
+        if rc == 0:
+            log("Recovery completed.")
+        return rc
+
+    log("Starting recovery: reset + main phase.")
+    rc = run_phase(args, "article-reset")
+    if rc != 0:
+        return rc
+
+    rc = run_phase(args, "article-main")
+    if rc != 0:
+        return rc
+
+    state = read_state(state_file)
+    if state.get("phase") == "main_done":
+        log("Main phase completed.")
+        log("NEEDLE_REQUIRED: put the modem into needle mode again, then rerun the same command.")
+        return 10
+
+    log("Recovery did not reach saved main_done state.")
+    return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Clean standalone E3372h-153 needle recovery wrapper over the recovery engine.",
     )
     parser.add_argument(
         "phase",
-        choices=("status", "assets", "reset", "main", "webui", "flow"),
+        choices=("status", "assets", "reset", "main", "webui", "flow", "all"),
         help="Recovery phase to run.",
     )
     parser.add_argument("--needle-port", default="/dev/ttyUSB0")
@@ -257,6 +292,12 @@ def main() -> int:
     if args.phase == "flow":
         try:
             return run_phase(args, "article-flow")
+        except FileNotFoundError as exc:
+            return fail(str(exc))
+
+    if args.phase == "all":
+        try:
+            return run_all(args)
         except FileNotFoundError as exc:
             return fail(str(exc))
 
