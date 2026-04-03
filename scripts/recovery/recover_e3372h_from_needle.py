@@ -292,6 +292,8 @@ def balong_flash_stage(args: argparse.Namespace, port: str, image: str, extra_ar
         env["BALONG_RELAX_DATAMODE"] = "1"
     if args.force_datamode:
         env["BALONG_FORCE_DATAMODE"] = "1"
+    if args.skip_cdromiso and ("WEBUI" in image_path.name.upper()):
+        env["BALONG_SKIP_CDROMISO"] = "1"
     log(f"flash stage image={image_path.name} port={port} extra={extra_args or []}")
     subprocess.run(command, check=True, env=env)
 
@@ -359,21 +361,31 @@ def article_webui_flow(args: argparse.Namespace) -> int:
     if not args.webui_image:
         raise SystemExit("ERROR: webui image is required for article webui stage")
     port = require_clean_1442(args)
-    balong_flash_stage(args, port, args.webui_image, args.webui_flags.split())
+    webui_error = None
+    try:
+        balong_flash_stage(args, port, args.webui_image, args.webui_flags.split())
+    except subprocess.CalledProcessError as exc:
+        webui_error = str(exc)
+        log(f"webui stage exited non-zero, checking post-webui state: {webui_error}")
     pid = wait_for_pid({"14dc", "1442", "1c05", "1506", "1c20"}, args.wait_reboot)
     ports = ttyusb_ports()
+    phase = "webui_done" if pid == "14dc" else "webui_pending"
     write_state(
         args.state_file,
         {
-            "phase": "webui_done",
+            "phase": phase,
             "final_pid": pid,
             "final_ports": ports,
             "timestamp": int(time.time()),
             "webui_image": args.webui_image,
+            "webui_error": webui_error,
         },
     )
-    log(f"webui stage complete, pid={pid or 'none'} ports={ports}")
-    return 0
+    if phase == "webui_done":
+        log(f"webui stage complete, pid={pid or 'none'} ports={ports}")
+        return 0
+    log(f"webui stage incomplete, pid={pid or 'none'} ports={ports}")
+    raise SystemExit("ERROR: re-enter needle mode and rerun article-flow to continue webui stage")
 
 
 def article_flow(args: argparse.Namespace) -> int:
@@ -384,7 +396,7 @@ def article_flow(args: argparse.Namespace) -> int:
         args.webui_image = str(state.get("webui_image") or args.webui_image)
     if state.get("recovery_image"):
         args.recovery_image = str(state.get("recovery_image") or args.recovery_image)
-    if state.get("phase") == "main_done":
+    if state.get("phase") in {"main_done", "webui_pending"}:
         return article_webui_flow(args)
     return article_main_flow(args)
 
@@ -415,6 +427,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-datamode", action="store_true", default=False)
     parser.add_argument("--relax-datamode", action="store_true", default=True)
     parser.add_argument("--force-datamode", action="store_true", default=False)
+    parser.add_argument("--skip-cdromiso", action="store_true", default=True)
     parser.add_argument("--state-file", default="/tmp/e3372h_needle_state.json")
     parser.add_argument("--wait-usbload", type=float, default=20.0)
     parser.add_argument("--wait-reboot", type=float, default=20.0)

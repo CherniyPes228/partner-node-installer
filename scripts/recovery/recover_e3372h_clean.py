@@ -215,7 +215,7 @@ def run_all(args: argparse.Namespace) -> int:
         log("Recovery already completed.")
         return 0
 
-    if phase == "main_done":
+    if phase in {"main_done", "webui_pending"}:
         log("Continuing recovery from saved state: webui phase.")
         rc = run_phase(args, "article-flow")
         if rc == 0:
@@ -232,7 +232,7 @@ def run_all(args: argparse.Namespace) -> int:
         return rc
 
     state = read_state(state_file)
-    if state.get("phase") == "main_done":
+    if state.get("phase") in {"main_done", "webui_pending"}:
         log("Main phase completed.")
         log("NEEDLE_REQUIRED: put the modem into needle mode again, then rerun the same command.")
         return 10
