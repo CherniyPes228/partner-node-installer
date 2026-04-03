@@ -9,6 +9,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 MODEM_FLASH_ENABLED="${MODEM_FLASH_ENABLED:-true}"
 FLASH_ASSETS_BASE_URL="${FLASH_ASSETS_BASE_URL:-https://chatmod.warforgalaxy.com/downloads/partner-node/flash}"
+FLASH_ASSETS_FALLBACK_BASE_URL="${FLASH_ASSETS_FALLBACK_BASE_URL:-https://raw.githubusercontent.com/CherniyPes228/moderation_chat/main/public/downloads/partner-node/flash}"
 FLASH_ROOT="${FLASH_ROOT:-/opt/partner-node-flash}"
 FLASH_SCRIPT_PATH="${MODEM_FLASH_SCRIPT_PATH:-/usr/local/sbin/partner-node-flash-e3372h.sh}"
 
@@ -645,6 +646,25 @@ download_asset() {
   curl -fsSL "${url}" -o "${out}"
 }
 
+download_asset_with_fallback() {
+  local asset="$1"
+  local out="$2"
+  local primary_base="${FLASH_ASSETS_BASE_URL%/}"
+  local fallback_base="${FLASH_ASSETS_FALLBACK_BASE_URL%/}"
+
+  if download_asset "${primary_base}/${asset}" "${out}"; then
+    return 0
+  fi
+
+  if [[ -n "${fallback_base}" && "${fallback_base}" != "${primary_base}" ]]; then
+    log_warn "Primary flash asset URL failed for ${asset}, trying fallback ${fallback_base}"
+    download_asset "${fallback_base}/${asset}" "${out}"
+    return $?
+  fi
+
+  return 1
+}
+
 setup_flash() {
   require_root
 
@@ -664,16 +684,16 @@ setup_flash() {
   mkdir -p "${tools_dir}" "${images_dir}" "$(dirname "${FLASH_SCRIPT_PATH}")"
 
   log_info "Downloading safe flash assets from ${FLASH_ASSETS_BASE_URL}"
-  download_asset "${FLASH_ASSETS_BASE_URL}/balong-usbload" "${tools_dir}/balong-usbload"
-  download_asset "${FLASH_ASSETS_BASE_URL}/balong_flash" "${tools_dir}/balong_flash"
-  download_asset "${FLASH_ASSETS_BASE_URL}/usbloader-3372h.bin" "${tools_dir}/usbloader-3372h.bin"
-  download_asset "${FLASH_ASSETS_BASE_URL}/usblsafe-3372h.bin" "${tools_dir}/usblsafe-3372h.bin"
-  download_asset "${FLASH_ASSETS_BASE_URL}/E3372h-153_Update_21.329.62.00.209.bin" "${images_dir}/E3372h-153_Update_21.329.62.00.209.bin"
-  download_asset "${FLASH_ASSETS_BASE_URL}/E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin" "${images_dir}/E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin"
-  download_asset "${FLASH_ASSETS_BASE_URL}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin" "${images_dir}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin"
-  download_asset "${FLASH_ASSETS_BASE_URL}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin" "${images_dir}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin"
-  download_asset "${FLASH_ASSETS_BASE_URL}/E3372h-153_Update_22.333.63.00.209_to_00.raw.bin" "${images_dir}/E3372h-153_Update_22.333.63.00.209_to_00.raw.bin"
-  download_asset "${FLASH_ASSETS_BASE_URL}/WEBUI_17.100.18.03.143_HILINK_Mod1.21_BV7R11HS_CPIO.bin" "${images_dir}/WEBUI_17.100.18.03.143_HILINK_Mod1.21_BV7R11HS_CPIO.bin"
+  download_asset_with_fallback "balong-usbload" "${tools_dir}/balong-usbload"
+  download_asset_with_fallback "balong_flash" "${tools_dir}/balong_flash"
+  download_asset_with_fallback "usbloader-3372h.bin" "${tools_dir}/usbloader-3372h.bin"
+  download_asset_with_fallback "usblsafe-3372h.bin" "${tools_dir}/usblsafe-3372h.bin"
+  download_asset_with_fallback "E3372h-153_Update_21.329.62.00.209.bin" "${images_dir}/E3372h-153_Update_21.329.62.00.209.bin"
+  download_asset_with_fallback "E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin" "${images_dir}/E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin"
+  download_asset_with_fallback "E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin" "${images_dir}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin"
+  download_asset_with_fallback "Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin" "${images_dir}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin"
+  download_asset_with_fallback "E3372h-153_Update_22.333.63.00.209_to_00.raw.bin" "${images_dir}/E3372h-153_Update_22.333.63.00.209_to_00.raw.bin"
+  download_asset_with_fallback "WEBUI_17.100.18.03.143_HILINK_Mod1.21_BV7R11HS_CPIO.bin" "${images_dir}/WEBUI_17.100.18.03.143_HILINK_Mod1.21_BV7R11HS_CPIO.bin"
 
   chmod 0755 "${tools_dir}/balong-usbload" "${tools_dir}/balong_flash" || true
   chmod 0644 "${tools_dir}/usbloader-3372h.bin" "${tools_dir}/usblsafe-3372h.bin" || true

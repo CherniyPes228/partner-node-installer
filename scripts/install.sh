@@ -1634,21 +1634,44 @@ install_flash_assets() {
     if ! curl -fsSL "${url}" -o "${out}"; then
       log_warn "Failed to download ${url}"
       failures=$((failures + 1))
+      return 1
     fi
+    return 0
+  }
+
+  download_asset_with_fallback() {
+    local asset="$1"
+    local out="$2"
+    local primary_base="${base}"
+    local fallback_base="${FLASH_ASSETS_FALLBACK_BASE_URL:-https://raw.githubusercontent.com/CherniyPes228/moderation_chat/main/public/downloads/partner-node/flash}"
+
+    if download_asset "${primary_base}/${asset}" "${out}"; then
+      return 0
+    fi
+
+    if [[ -n "${fallback_base}" && "${fallback_base%/}" != "${primary_base%/}" ]]; then
+      log_warn "Trying fallback flash asset URL for ${asset}: ${fallback_base}"
+      if download_asset "${fallback_base%/}/${asset}" "${out}"; then
+        failures=$((failures - 1))
+        return 0
+      fi
+    fi
+
+    return 1
   }
 
   log_info "Downloading modem flash assets from ${base}"
-  download_asset "${base}/balong-usbload" "${tools}/balong-usbload"
-  download_asset "${base}/balong_flash" "${tools}/balong_flash"
-  download_asset "${base}/usbloader-3372h.bin" "${tools}/usbloader-3372h.bin"
-  download_asset "${base}/usblsafe-3372h.bin" "${tools}/usblsafe-3372h.bin"
+  download_asset_with_fallback "balong-usbload" "${tools}/balong-usbload"
+  download_asset_with_fallback "balong_flash" "${tools}/balong_flash"
+  download_asset_with_fallback "usbloader-3372h.bin" "${tools}/usbloader-3372h.bin"
+  download_asset_with_fallback "usblsafe-3372h.bin" "${tools}/usblsafe-3372h.bin"
 
-  download_asset "${base}/E3372h-153_Update_21.329.62.00.209.bin" "${images}/E3372h-153_Update_21.329.62.00.209.bin"
-  download_asset "${base}/E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin" "${images}/E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin"
-  download_asset "${base}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin" "${images}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin"
-  download_asset "${base}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin" "${images}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin"
-  download_asset "${base}/E3372h-153_Update_22.333.63.00.209_to_00.raw.bin" "${images}/E3372h-153_Update_22.333.63.00.209_to_00.raw.bin"
-  download_asset "${base}/WEBUI_17.100.18.03.143_HILINK_Mod1.21_BV7R11HS_CPIO.bin" "${images}/WEBUI_17.100.18.03.143_HILINK_Mod1.21_BV7R11HS_CPIO.bin"
+  download_asset_with_fallback "E3372h-153_Update_21.329.62.00.209.bin" "${images}/E3372h-153_Update_21.329.62.00.209.bin"
+  download_asset_with_fallback "E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin" "${images}/E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin"
+  download_asset_with_fallback "E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin" "${images}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin"
+  download_asset_with_fallback "Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin" "${images}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin"
+  download_asset_with_fallback "E3372h-153_Update_22.333.63.00.209_to_00.raw.bin" "${images}/E3372h-153_Update_22.333.63.00.209_to_00.raw.bin"
+  download_asset_with_fallback "WEBUI_17.100.18.03.143_HILINK_Mod1.21_BV7R11HS_CPIO.bin" "${images}/WEBUI_17.100.18.03.143_HILINK_Mod1.21_BV7R11HS_CPIO.bin"
 
   if [[ "${failures}" -gt 0 ]]; then
     log_warn "Modem flash assets are incomplete (${failures} failed downloads); disabling modem flash."
