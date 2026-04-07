@@ -14,14 +14,15 @@ FLASH_ROOT="${FLASH_ROOT:-/opt/partner-node-flash}"
 FLASH_SCRIPT_PATH="${MODEM_FLASH_SCRIPT_PATH:-/usr/local/sbin/partner-node-flash-e3372h.sh}"
 MANUAL_RECOVERY_PATH="${MODEM_NEEDLE_RECOVERY_PATH:-/usr/local/sbin/recover-e3372h-needle}"
 INSTALLER_RAW_BASE_URL="${INSTALLER_RAW_BASE_URL:-https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main}"
+FLASH_SCRIPT_SOURCE_BASE_URL="${FLASH_SCRIPT_SOURCE_BASE_URL:-https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/d12b85aab2517829a7f3a470720657079e3a46b0}"
 
 write_flash_script() {
-  download_asset "${INSTALLER_RAW_BASE_URL}/scripts/flash/linux_flash_e3372h.sh" "${FLASH_SCRIPT_PATH}"
+  download_asset "${FLASH_SCRIPT_SOURCE_BASE_URL}/scripts/flash/linux_flash_e3372h.sh" "${FLASH_SCRIPT_PATH}"
   chmod 0755 "${FLASH_SCRIPT_PATH}"
 }
 
 write_manual_recovery_wrapper() {
-  download_asset "${INSTALLER_RAW_BASE_URL}/scripts/recovery/recover_e3372h_needle_manual.sh" "${MANUAL_RECOVERY_PATH}"
+  download_asset "${FLASH_SCRIPT_SOURCE_BASE_URL}/scripts/recovery/recover_e3372h_needle_manual.sh" "${MANUAL_RECOVERY_PATH}"
   chmod 0755 "${MANUAL_RECOVERY_PATH}"
   ln -sf "${MANUAL_RECOVERY_PATH}" /usr/local/sbin/recover-e3372h-clean
 }
