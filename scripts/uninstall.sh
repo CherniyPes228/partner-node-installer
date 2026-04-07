@@ -153,6 +153,7 @@ main() {
   remove_if_exists "/usr/local/sbin/partner-node-self-update.sh"
   remove_if_exists "/usr/local/sbin/partner-node-flash-e3372h.sh"
   remove_if_exists "/usr/local/sbin/recover-e3372h-clean"
+  remove_if_exists "/usr/local/sbin/recover-e3372h-needle"
 
   remove_if_exists "/etc/partner-node"
   remove_if_exists "/var/lib/partner-node"
