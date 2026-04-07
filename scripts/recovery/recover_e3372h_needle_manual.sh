@@ -13,7 +13,7 @@ PTABLE="${PTABLE:-${TOOLS_DIR}/ptable-hilink.bin}"
 USBLSAFE="${USBLSAFE:-${TOOLS_DIR}/usblsafe-3372h.bin}"
 MAIN_FW="${MAIN_FW:-${IMAGES_DIR}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin}"
 WEBUI_FW="${WEBUI_FW:-${IMAGES_DIR}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin}"
-MODE="${1:-b}"
+MODE="${1:-f}"
 
 log() { printf '\n[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
