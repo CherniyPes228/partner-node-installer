@@ -18,8 +18,17 @@ FLASHBIN="$TOOLS_DIR/balong_flash_recover"
 FULL_FW=""
 
 # Р вЂ™Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљ 2: РЎР‚Р В°Р В·Р Т‘Р ВµР В»РЎРЉР Р…Р С• main + webui
-MAIN_FW="$IMAGES_DIR/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin"
-WEBUI_FW="$IMAGES_DIR/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin"
+MAIN_FW="${MAIN_FW:-$IMAGES_DIR/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin}"
+WEBUI_FW="${WEBUI_FW:-}"
+if [[ -z "$WEBUI_FW" ]]; then
+  if [[ -f "$IMAGES_DIR/WEBUI_17.100.18.03.143_HILINK_Mod1.21_E3372h-153.bin" ]]; then
+    WEBUI_FW="$IMAGES_DIR/WEBUI_17.100.18.03.143_HILINK_Mod1.21_E3372h-153.bin"
+  elif [[ -f "$IMAGES_DIR/WEBUI_17.100.18.03.143_HILINK_Mod1.21_BV7R11HS_CPIO.bin" ]]; then
+    WEBUI_FW="$IMAGES_DIR/WEBUI_17.100.18.03.143_HILINK_Mod1.21_BV7R11HS_CPIO.bin"
+  else
+    WEBUI_FW="$IMAGES_DIR/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin"
+  fi
+fi
 
 USBLOAD="$TOOLS_DIR/balong-usbload"
 USBLSAFE="$TOOLS_DIR/usblsafe-3372h.bin"
@@ -85,6 +94,7 @@ wait_huawei_state() {
 
 bring_usbnet_up() {
   local iface
+  clean_non_huawei_net_addresses
   for iface in $(huawei_net_interfaces); do
     sudo ip link set "$iface" up 2>/dev/null || true
     sudo ip addr add 192.168.8.100/24 dev "$iface" 2>/dev/null || true
@@ -110,6 +120,17 @@ huawei_net_interfaces() {
   done
 }
 
+clean_non_huawei_net_addresses() {
+  local iface
+
+  for iface in $(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|eth)' || true); do
+    if ! huawei_net_interfaces | grep -qx "$iface"; then
+      sudo ip addr del 192.168.8.100/24 dev "$iface" 2>/dev/null || true
+      sudo ip addr del 192.168.1.100/24 dev "$iface" 2>/dev/null || true
+    fi
+  done
+}
+
 recover_network() {
   local iface
   local ok=1
@@ -130,6 +151,41 @@ recover_network() {
   curl -fsS --max-time 5 http://192.168.1.1/api/webserver/SesTokInfo >/dev/null 2>&1 && ok=0
 
   return $ok
+}
+
+wait_hilink_webui() {
+  local timeout="${1:-120}"
+  local i=0
+  local iface
+  local carrier
+  local oper
+
+  while (( i < timeout )); do
+    bring_usbnet_up
+
+    if lsusb | grep -q '12d1:14dc'; then
+      for iface in $(huawei_net_interfaces); do
+        carrier="$(cat "/sys/class/net/$iface/carrier" 2>/dev/null || echo 0)"
+        oper="$(cat "/sys/class/net/$iface/operstate" 2>/dev/null || echo down)"
+        log "HiLink check: $iface carrier=$carrier oper=$oper"
+      done
+
+      if ping -c 1 -W 2 192.168.8.1 >/dev/null 2>&1 &&
+        curl -fsS --max-time 5 http://192.168.8.1/api/webserver/SesTokInfo >/dev/null 2>&1; then
+        return 0
+      fi
+
+      if ping -c 1 -W 2 192.168.1.1 >/dev/null 2>&1 &&
+        curl -fsS --max-time 5 http://192.168.1.1/api/webserver/SesTokInfo >/dev/null 2>&1; then
+        return 0
+      fi
+    fi
+
+    sleep 5
+    ((i+=5))
+  done
+
+  return 1
 }
 
 ensure_hilink_mode() {
@@ -369,7 +425,12 @@ fi
 
   log "Р РЃР В°Р С– 6. Р вЂўРЎРѓР В»Р С‘ Р СР С•Р Т‘Р ВµР С Р В·Р В°Р Р†Р С‘РЎРѓ Р Р† Р С—РЎР‚Р С•РЎв‚¬Р С‘Р Р†Р С•РЎвЂЎР Р…Р С•Р С РЎР‚Р ВµР В¶Р С‘Р СР Вµ, Р С—РЎР‚Р С•Р В±РЎС“РЎР‹ -r"
   if [[ -n "${port:-}" && -e "${port:-/dev/null}" ]]; then
+    log "Clearing modem runtime config flags before reboot"
+    printf 'ATINVMST\r' | sudo tee "$port" >/dev/null || true
+    sleep 2
     sudo "$FLASHBIN" -p "$port" -r || true
+    log "Modem is rebooting, waiting for USB re-enumeration"
+    sleep 45
   fi
 
   log "Р РЃР В°Р С– 7. Р вЂ™Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°РЎР‹ РЎРѓР ВµРЎР‚Р Р†Р С‘РЎРѓРЎвЂ№ Р С—Р ВµРЎР‚Р ВµР Т‘ Р С—РЎР‚Р С•Р Р†Р ВµРЎР‚Р С”Р С•Р в„– РЎРѓР ВµРЎвЂљР С‘"
@@ -377,7 +438,7 @@ fi
   sleep 5
 
   log "Р РЃР В°Р С– 8. Р СџРЎвЂ№РЎвЂљР В°РЎР‹РЎРѓРЎРЉ Р С—Р С•Р Т‘Р Р…РЎРЏРЎвЂљРЎРЉ РЎРѓР ВµРЎвЂљРЎРЉ Р СР С•Р Т‘Р ВµР СР В°"
-  if recover_network; then
+  if wait_hilink_webui 180; then
     log "Р РЋР ВµРЎвЂљРЎРЉ Р С—Р С•Р Т‘Р Р…РЎРЏР В»Р В°РЎРѓРЎРЉ. Р СџРЎР‚Р С•Р В±РЎС“Р в„– http://192.168.8.1 Р С‘ http://192.168.1.1"
   else
     log "Р СџРЎР‚Р С•РЎв‚¬Р С‘Р Р†Р С”Р В° Р В·Р В°Р Р†Р ВµРЎР‚РЎв‚¬Р ВµР Р…Р В°, Р Р…Р С• РЎРѓР ВµРЎвЂљРЎРЉ Р В°Р Р†РЎвЂљР С•Р СР В°РЎвЂљР С‘РЎвЂЎР ВµРЎРѓР С”Р С‘ Р Р…Р Вµ Р С—Р С•Р Т‘Р Р…РЎРЏР В»Р В°РЎРѓРЎРЉ"
