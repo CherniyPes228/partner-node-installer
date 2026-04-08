@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Live E3372h flasher used by the partner UI. This is intentionally not a
-# needle-recovery script: support runs needle recovery manually over SSH.
-
 MODEM_ID=""
 ORDINAL=""
 while [[ $# -gt 0 ]]; do
@@ -13,23 +10,34 @@ while [[ $# -gt 0 ]]; do
     *) shift ;;
   esac
 done
+TOOLS_DIR="/opt/partner-node-flash/tools"
+IMAGES_DIR="/opt/partner-node-flash/images"
 
-FLASH_ROOT="${FLASH_ROOT:-/opt/partner-node-flash}"
-TOOLS_DIR="${TOOLS_DIR:-${FLASH_ROOT}/tools}"
-IMAGES_DIR="${IMAGES_DIR:-${FLASH_ROOT}/images}"
+FLASHBIN="$TOOLS_DIR/balong_flash_recover"
 
-FLASHBIN="${FLASHBIN:-${TOOLS_DIR}/balong_flash_recover}"
-MAIN_FW="${MAIN_FW:-${IMAGES_DIR}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin}"
-WEBUI_FW="${WEBUI_FW:-${IMAGES_DIR}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin}"
-FULL_FW="${FULL_FW:-}"
+FULL_FW=""
 
-TARGET_MAIN_VERSION="${TARGET_MAIN_VERSION:-22.333.01.00.00}"
-TARGET_WEBUI_VERSION="${TARGET_WEBUI_VERSION:-17.100.13.113.03}"
-TARGET_WEBUI_PACKAGE_LABEL="${TARGET_WEBUI_PACKAGE_LABEL:-17.100.13.01.03}"
+# Р вЂ™Р В°РЎР‚Р С‘Р В°Р Р…РЎвЂљ 2: РЎР‚Р В°Р В·Р Т‘Р ВµР В»РЎРЉР Р…Р С• main + webui
+MAIN_FW="$IMAGES_DIR/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin"
+WEBUI_FW="$IMAGES_DIR/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin"
 
-log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
-stage() { printf 'STAGE:%s\n' "$1"; }
-die() { printf 'ERROR:%s\n' "$*" >&2; exit 1; }
+USBLOAD="$TOOLS_DIR/balong-usbload"
+USBLSAFE="$TOOLS_DIR/usblsafe-3372h.bin"
+PTABLE="$TOOLS_DIR/ptable-hilink.bin"
+
+log() {
+  printf '\n[%s] %s\n' "$(date +%H:%M:%S)" "$*"
+}
+
+die() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+
+stage() {
+  printf 'STAGE:%s\n' "$1"
+}
 
 sudo() {
   if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
@@ -38,24 +46,17 @@ sudo() {
     command sudo "$@"
   fi
 }
-
-need_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
-need_file() { [[ -f "$1" ]] || die "missing file: $1"; }
-
-stop_services() {
-  stage "stop_services"
-  sudo systemctl stop ModemManager 2>/dev/null || true
-  sudo systemctl stop NetworkManager 2>/dev/null || true
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "Р СњР Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р…Р В° Р С”Р С•Р СР В°Р Р…Р Т‘Р В°: $1"
 }
 
-start_services() {
-  sudo systemctl start NetworkManager 2>/dev/null || true
-  sudo systemctl start ModemManager 2>/dev/null || true
+need_file() {
+  [[ -f "$1" ]] || die "Р СњР Вµ Р Р…Р В°Р в„–Р Т‘Р ВµР Р… РЎвЂћР В°Р в„–Р В»: $1"
 }
-trap start_services EXIT
 
 wait_dev_any() {
-  local timeout="${1:-30}" i=0
+  local timeout="${1:-25}"
+  local i=0
   while (( i < timeout )); do
     for p in /dev/ttyUSB0 /dev/ttyUSB1 /dev/ttyUSB2; do
       [[ -e "$p" ]] && return 0
@@ -67,12 +68,13 @@ wait_dev_any() {
 }
 
 wait_huawei_state() {
-  local timeout="${1:-45}" i=0
+  local timeout="${1:-40}"
+  local i=0
   while (( i < timeout )); do
     if lsusb | grep -Eq '12d1:(14dc|1f01|1506|1442)'; then
       return 0
     fi
-    if compgen -G "/dev/ttyUSB*" >/dev/null; then
+    if ls /dev/ttyUSB* >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
@@ -81,145 +83,90 @@ wait_huawei_state() {
   return 1
 }
 
-huawei_net_ifaces() {
-  local iface props
-  while IFS= read -r iface; do
-    [[ -n "$iface" ]] || continue
-    props="$(udevadm info -q property -p "/sys/class/net/${iface}" 2>/dev/null || true)"
-    if printf '%s\n' "$props" | grep -q '^ID_VENDOR_ID=12d1$'; then
-      printf '%s\n' "$iface"
-    fi
-  done < <(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|wwan|eth)' || true)
-}
-
 bring_usbnet_up() {
   local iface
-  while IFS= read -r iface; do
-    [[ -n "$iface" ]] || continue
+  for iface in $(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|eth)' || true); do
     sudo ip link set "$iface" up 2>/dev/null || true
     sudo ip addr add 192.168.8.100/24 dev "$iface" 2>/dev/null || true
     sudo ip addr add 192.168.1.100/24 dev "$iface" 2>/dev/null || true
-  done < <(huawei_net_ifaces)
+  done
 }
 
 recover_network() {
-  local iface ok=1
-  stage "recover_network"
+  local iface
+  local ok=1
+
   bring_usbnet_up
   sleep 2
-  while IFS= read -r iface; do
-    [[ -n "$iface" ]] || continue
+
+  for iface in $(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|eth)' || true); do
     sudo ip link set "$iface" up 2>/dev/null || true
     sudo ip route replace 192.168.8.0/24 dev "$iface" 2>/dev/null || true
     sudo ip route replace 192.168.1.0/24 dev "$iface" 2>/dev/null || true
-  done < <(huawei_net_ifaces)
+  done
+
+  ip -br addr || true
+  ip route || true
+
   ping -c 2 192.168.8.1 >/dev/null 2>&1 && ok=0
   ping -c 2 192.168.1.1 >/dev/null 2>&1 && ok=0
-  return "$ok"
+
+  return $ok
 }
 
 ensure_hilink_mode() {
-  local timeout="${1:-30}" i=0
+  local timeout="${1:-30}"
+  local i=0
+
   while (( i < timeout )); do
-    lsusb | grep -q '12d1:14dc' && return 0
+    if lsusb | grep -q '12d1:14dc'; then
+      return 0
+    fi
+
     if lsusb | grep -q '12d1:1f01'; then
+      log "Р вЂ™Р С‘Р В¶РЎС“ 12d1:1f01, Р С—Р ВµРЎР‚Р ВµР С”Р В»РЎР‹РЎвЂЎР В°РЎР‹ Р Р† 14dc РЎвЂЎР ВµРЎР‚Р ВµР В· usb_modeswitch"
       sudo usb_modeswitch -J -v 0x12d1 -p 0x1f01 || true
     fi
+
     sleep 2
-    ((i+=2))
+    ((i+=1))
   done
+
   lsusb | grep -q '12d1:14dc'
 }
 
 wait_adb_on_hilink() {
-  local timeout="${1:-40}" i=0
-  local host
+  local timeout="${1:-40}"
+  local i=0
+
   while (( i < timeout )); do
     bring_usbnet_up
-    for host in 192.168.8.1 192.168.1.1; do
-      if curl -fsS --max-time 2 "http://${host}/api/webserver/SesTokInfo" >/dev/null 2>&1 || ping -c 1 -W 1 "$host" >/dev/null 2>&1; then
-        timeout 4 adb connect "${host}:5555" >/dev/null 2>&1 || true
-      fi
-    done
-    timeout 4 adb devices | grep -qE '192\.168\.(8|1)\.1:5555' && return 0
+    adb connect 192.168.8.1:5555 >/dev/null 2>&1 || true
+    adb connect 192.168.1.1:5555 >/dev/null 2>&1 || true
+
+    if adb devices | grep -qE '192\.168\.(8|1)\.1:5555'; then
+      return 0
+    fi
+
     sleep 2
     ((i+=2))
   done
+
   return 1
-}
-
-enable_hilink_project_mode() {
-  local base="${1:-}"
-  local cookiejar page tokens token response
-
-  [[ -n "$base" ]] || return 1
-  cookiejar="$(mktemp)"
-  page="$(curl -fsS --max-time 10 -b "$cookiejar" -c "$cookiejar" "${base}/html/home.html" 2>/dev/null || true)"
-  tokens="$(printf '%s' "$page" | grep -o 'meta name="csrf_token" content="[^"]*"' | sed 's/.*content="//; s/"$//')"
-  if [[ -z "$tokens" ]]; then
-    rm -f "$cookiejar"
-    return 1
-  fi
-
-  while IFS= read -r token; do
-    [[ -n "$token" ]] || continue
-    response="$(curl -fsS --max-time 15 \
-      -b "$cookiejar" -c "$cookiejar" \
-      -H "__RequestVerificationToken: ${token}" \
-      -H "Content-Type: text/xml" \
-      -H "Referer: ${base}/html/home.html" \
-      -H "X-Requested-With: XMLHttpRequest" \
-      --data '<request><mode>1</mode></request>' \
-      "${base}/api/device/mode" 2>/dev/null || true)"
-    if printf '%s' "$response" | grep -q "<response>OK</response>"; then
-      rm -f "$cookiejar"
-      return 0
-    fi
-  done <<< "$tokens"
-
-  rm -f "$cookiejar"
-  return 1
-}
-
-maybe_bind_option_driver_14dc() {
-  if [[ ! -w /sys/bus/usb-serial/drivers/option1/new_id ]]; then
-    return 0
-  fi
-  sudo modprobe option >/dev/null 2>&1 || true
-  echo "STAGE:bind_option_driver"
-  echo "12d1 14dc" | sudo tee /sys/bus/usb-serial/drivers/option1/new_id >/dev/null 2>&1 || true
-  sleep 3
-}
-
-godload_via_project_mode() {
-  local base
-  bring_usbnet_up
-  sleep 1
-  base="$(find_hilink_base_url || true)"
-  if [[ -z "$base" ]]; then
-    log "HiLink base URL not available for project mode"
-    return 1
-  fi
-  log "enabling HiLink project mode through ${base}"
-  if ! enable_hilink_project_mode "$base"; then
-    log "HiLink project mode API did not return OK"
-    return 1
-  fi
-  sleep 5
-  maybe_bind_option_driver_14dc
-  wait_dev_any 20 || return 1
-  send_godload_any
 }
 
 godload_via_adb() {
   local attempt
   for attempt in 1 2 3 4 5; do
-    log "ADB/GODLOAD attempt ${attempt}"
+    log "ADB/GODLOAD Р С—Р С•Р С—РЎвЂ№РЎвЂљР С”Р В° #$attempt"
+    bring_usbnet_up
+
     if wait_adb_on_hilink 20; then
-      timeout 4 adb shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
-      timeout 4 adb -s 192.168.8.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
-      timeout 4 adb -s 192.168.1.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+      adb shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+      adb -s 192.168.8.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+      adb -s 192.168.1.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
     fi
+
     sleep 3
   done
   return 1
@@ -229,8 +176,8 @@ send_godload_any() {
   local p
   for p in /dev/ttyUSB0 /dev/ttyUSB1 /dev/ttyUSB2; do
     [[ -e "$p" ]] || continue
-    log "sending AT^GODLOAD to ${p}"
-    printf 'AT^GODLOAD\r' | sudo tee "$p" >/dev/null || true
+    log "Р С›РЎвЂљР С—РЎР‚Р В°Р Р†Р В»РЎРЏРЎР‹ AT^GODLOAD Р Р† $p"
+    echo -e "AT^GODLOAD\r" | sudo tee "$p" >/dev/null || true
     sleep 2
     return 0
   done
@@ -238,163 +185,188 @@ send_godload_any() {
 }
 
 enter_flash_mode() {
-  stage "godload"
-  if compgen -G "/dev/ttyUSB*" >/dev/null; then
+  log "Р СџРЎР‚Р С•Р В±РЎС“РЎР‹ Р Р†Р С•Р в„–РЎвЂљР С‘ Р Р† РЎР‚Р ВµР В¶Р С‘Р С Р С—РЎР‚Р С•РЎв‚¬Р С‘Р Р†Р С”Р С‘ Р В±Р ВµР В· Р С‘Р С–Р В»РЎвЂ№"
+
+  # Р вЂўРЎРѓР В»Р С‘ РЎС“Р В¶Р Вµ Р ВµРЎРѓРЎвЂљРЎРЉ ttyUSB, Р С—РЎР‚Р С•Р В±РЎС“Р ВµР С AT-Р С—Р С•РЎР‚РЎвЂљ
+  if ls /dev/ttyUSB* >/dev/null 2>&1; then
     send_godload_any && return 0
   fi
+
+  # Р вЂўРЎРѓР В»Р С‘ РЎС“РЎРѓРЎвЂљРЎР‚Р С•Р в„–РЎРѓРЎвЂљР Р†Р С• Р Р† 1f01, Р С—Р ВµРЎР‚Р ВµР Р†Р С•Р Т‘Р С‘Р С Р Р† 14dc
   if lsusb | grep -q '12d1:1f01'; then
     ensure_hilink_mode 30 || true
   fi
+
+  # Р вЂўРЎРѓР В»Р С‘ РЎС“Р В¶Р Вµ HiLink, Р С—РЎР‚Р С•Р В±РЎС“Р ВµР С ADB
   if lsusb | grep -q '12d1:14dc'; then
-    godload_via_project_mode && return 0
     godload_via_adb && return 0
   fi
-  if compgen -G "/dev/ttyUSB*" >/dev/null; then
+
+  # Р СџР С•Р Р†РЎвЂљР С•РЎР‚Р Р…Р В°РЎРЏ Р С—Р С•Р С—РЎвЂ№РЎвЂљР С”Р В° РЎвЂЎР ВµРЎР‚Р ВµР В· ttyUSB, Р ВµРЎРѓР В»Р С‘ Р С—Р С•РЎР‚РЎвЂљ Р С—Р С•РЎРЏР Р†Р С‘Р В»РЎРѓРЎРЏ
+  if ls /dev/ttyUSB* >/dev/null 2>&1; then
     send_godload_any && return 0
   fi
+
   return 1
 }
 
-choose_flash_port() {
+choose_flash_port_hilink() {
   for p in /dev/ttyUSB0 /dev/ttyUSB1 /dev/ttyUSB2; do
     [[ -e "$p" ]] && { echo "$p"; return 0; }
   done
   return 1
 }
 
+stop_services() {
+  log "Р С›РЎРѓРЎвЂљР В°Р Р…Р В°Р Р†Р В»Р С‘Р Р†Р В°РЎР‹ ModemManager Р С‘ NetworkManager"
+  sudo systemctl stop ModemManager 2>/dev/null || true
+  sudo systemctl stop NetworkManager 2>/dev/null || true
+}
+
+start_services() {
+  log "Р вЂ™Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°РЎР‹ NetworkManager Р С‘ ModemManager"
+  sudo systemctl start NetworkManager 2>/dev/null || true
+  sudo systemctl start ModemManager 2>/dev/null || true
+}
+
+cleanup() {
+  start_services
+}
+trap cleanup EXIT
+
 flash_main_no_needle() {
-  local p attempt
+  local p
+  local attempt
+
   for attempt in 1 2 3; do
-    log "main firmware attempt ${attempt}"
+    log "Р СџР С•Р С—РЎвЂ№РЎвЂљР С”Р В° main #$attempt"
+
+    # 1. Р ВµРЎРѓР В»Р С‘ РЎС“Р В¶Р Вµ Р ВµРЎРѓРЎвЂљРЎРЉ ttyUSB, Р С—РЎР‚Р С•Р В±РЎС“Р ВµР С Р Р…Р В°Р С—РЎР‚РЎРЏР СРЎС“РЎР‹
     for p in /dev/ttyUSB0 /dev/ttyUSB1 /dev/ttyUSB2; do
       [[ -e "$p" ]] || continue
-      log "trying main through ${p}"
+      log "Р СџРЎР‚Р С•Р В±РЎС“РЎР‹ main РЎРѓ -k РЎвЂЎР ВµРЎР‚Р ВµР В· $p"
       if sudo env BALONG_RELAX_DATAMODE=1 "$FLASHBIN" -k -p "$p" "$MAIN_FW"; then
-        printf '%s\n' "$p" > /tmp/e3372_last_flash_port
+        echo "$p" > /tmp/e3372_last_flash_port
         return 0
       fi
       sleep 1
     done
+
+    # 2. Р ВµРЎРѓР В»Р С‘ Р Р…Р Вµ Р Р†РЎвЂ№РЎв‚¬Р В»Р С•, Р ВµРЎвЂ°РЎвЂ РЎР‚Р В°Р В· Р Р† GODLOAD
+    log "Main Р Р…Р Вµ Р В·Р В°РЎв‚¬Р В»Р В°, Р С—Р С•Р Р†РЎвЂљР С•РЎР‚РЎРЏРЎР‹ GODLOAD"
     enter_flash_mode || true
     sleep 2
     wait_dev_any 20 || true
+    ls /dev/ttyUSB* 2>/dev/null || true
   done
+
   return 1
 }
 
 flash_webui_no_needle() {
-  local p try flash_port="${1:-}"
+  local p
+  local try
+  local flash_port="${1:-}"
+
   for ((try=1; try<=5; try++)); do
-    log "WebUI attempt ${try}"
+    log "Р СџР С•Р С—РЎвЂ№РЎвЂљР С”Р В° WebUI #$try"
+
+    # 1. Р РЋР Р…Р В°РЎвЂЎР В°Р В»Р В° Р С—РЎР‚Р С•Р В±РЎС“Р ВµР С РЎвЂљР ВµР С Р В¶Р Вµ Р С—Р С•РЎР‚РЎвЂљР С•Р С, Р С”Р С•РЎвЂљР С•РЎР‚РЎвЂ№Р С Р В·Р В°РЎв‚¬Р В»Р В° main
     if [[ -n "$flash_port" && -e "$flash_port" ]]; then
-      log "trying WebUI through primary port ${flash_port}"
+      log "Р СџРЎР‚Р С•Р В±РЎС“РЎР‹ WebUI РЎвЂЎР ВµРЎР‚Р ВµР В· Р С•РЎРѓР Р…Р С•Р Р†Р Р…Р С•Р в„– Р С—Р С•РЎР‚РЎвЂљ $flash_port"
       if sudo env BALONG_RELAX_DATAMODE=1 "$FLASHBIN" -p "$flash_port" "$WEBUI_FW"; then
+        log "WebUI Р С—РЎР‚Р С•РЎв‚¬Р С‘Р В»Р В°РЎРѓРЎРЉ РЎвЂЎР ВµРЎР‚Р ВµР В· $flash_port"
         return 0
       fi
       sleep 1
     fi
+
+    # 2. Р СџР С•РЎвЂљР С•Р С Р В±РЎвЂ№РЎРѓРЎвЂљРЎР‚РЎвЂ№Р в„– Р С—Р ВµРЎР‚Р ВµР В±Р С•РЎР‚ Р В¶Р С‘Р Р†РЎвЂ№РЎвЂ¦ Р С—Р С•РЎР‚РЎвЂљР С•Р Р†
     for p in /dev/ttyUSB0 /dev/ttyUSB1 /dev/ttyUSB2; do
-      [[ -e "$p" && "$p" != "$flash_port" ]] || continue
-      log "trying WebUI through ${p}"
+      [[ -e "$p" ]] || continue
+      [[ "$p" == "$flash_port" ]] && continue
+      log "Р СџРЎР‚Р С•Р В±РЎС“РЎР‹ WebUI РЎвЂЎР ВµРЎР‚Р ВµР В· $p"
       if sudo env BALONG_RELAX_DATAMODE=1 "$FLASHBIN" -p "$p" "$WEBUI_FW"; then
+        log "WebUI Р С—РЎР‚Р С•РЎв‚¬Р С‘Р В»Р В°РЎРѓРЎРЉ РЎвЂЎР ВµРЎР‚Р ВµР В· $p"
         return 0
       fi
       sleep 1
     done
+
+    # 3. Р вЂўРЎРѓР В»Р С‘ Р Р…Р Вµ Р Р†РЎвЂ№РЎв‚¬Р В»Р С•, РЎРѓР Р…Р С•Р Р†Р В° Р Т‘РЎвЂРЎР‚Р С–Р В°Р ВµР С GODLOAD Р С‘ Р В¶Р Т‘РЎвЂР С Р С—Р С•РЎР‚РЎвЂљРЎвЂ№
+    log "WebUI Р Р…Р Вµ Р В·Р В°РЎв‚¬Р В»Р В°, Р С—Р С•Р Р†РЎвЂљР С•РЎР‚РЎРЏРЎР‹ GODLOAD"
     enter_flash_mode || true
     sleep 3
     wait_dev_any 20 || true
+    ls /dev/ttyUSB* 2>/dev/null || true
   done
+
   return 1
-}
-
-find_hilink_base_url() {
-  for base in http://192.168.8.1 http://192.168.1.1; do
-    if curl -fsS --max-time 5 "${base}/api/webserver/SesTokInfo" 2>/dev/null | grep -q "<TokInfo>"; then
-      echo "$base"
-      return 0
-    fi
-  done
-  return 1
-}
-
-extract_tag() {
-  local tag="${1:-}"
-  sed -n "s:.*<${tag}>\\(.*\\)</${tag}>.*:\\1:p" | head -n 1
-}
-
-verify_target_versions() {
-  local base="${1:-}" xml fw webui
-  stage "verify"
-  xml="$(curl -fsS --max-time 15 "${base}/api/device/information" 2>/dev/null || true)"
-  [[ -n "$xml" ]] || { log "device information unavailable after flash"; return 0; }
-  fw="$(printf '%s' "$xml" | extract_tag "SoftwareVersion" | tr -d '\r\n\t ')"
-  webui="$(printf '%s' "$xml" | extract_tag "WebUIVersion" | tr -d '\r\n\t ')"
-  log "firmware=${fw} webui=${webui}"
-  [[ "$fw" == "$TARGET_MAIN_VERSION"* ]] || die "unexpected firmware version ${fw}, expected ${TARGET_MAIN_VERSION}"
-  [[ "$webui" == "$TARGET_WEBUI_VERSION"* || "$webui" == *"$TARGET_WEBUI_PACKAGE_LABEL"* ]] || die "unexpected webui version ${webui}, expected ${TARGET_WEBUI_VERSION}"
 }
 
 main() {
-  stage "precheck"
   need_cmd lsusb
   need_cmd adb
   need_cmd usb_modeswitch
   need_cmd sudo
+
   need_file "$FLASHBIN"
-  [[ -n "$FULL_FW" ]] || need_file "$MAIN_FW"
-  [[ -n "$FULL_FW" ]] || need_file "$WEBUI_FW"
-  [[ -z "$FULL_FW" ]] || need_file "$FULL_FW"
+  need_file "$MAIN_FW"
+  need_file "$WEBUI_FW"
+  need_file "$USBLOAD"
+  need_file "$USBLSAFE"
+  need_file "$PTABLE"
 
   stop_services
 
-  stage "detect_modem"
-  wait_huawei_state 45 || die "Huawei E3372h modem is not visible as HiLink or ttyUSB"
-  lsusb || true
+  log "Р РЃР В°Р С– 1. Р вЂ“Р Т‘РЎС“ РЎР‚Р В°Р В±Р С•РЎвЂЎР ВµР Вµ РЎРѓР С•РЎРѓРЎвЂљР С•РЎРЏР Р…Р С‘Р Вµ Р СР С•Р Т‘Р ВµР СР В°"
+  wait_huawei_state 40 || die "Р СљР С•Р Т‘Р ВµР С Р Р…Р Вµ Р Р†Р С‘Р Т‘Р ВµР Р… Р Р…Р С‘ Р С”Р В°Р С” HiLink, Р Р…Р С‘ Р С”Р В°Р С” ttyUSB"
+  lsusb
   ls /dev/ttyUSB* 2>/dev/null || true
 
-  enter_flash_mode || die "failed to enter firmware flashing mode without needle"
+  log "Р РЃР В°Р С– 2. Р вЂ™РЎвЂ¦Р С•Р В¶РЎС“ Р Р† РЎР‚Р ВµР В¶Р С‘Р С Р С—РЎР‚Р С•РЎв‚¬Р С‘Р Р†Р С”Р С‘ Р В±Р ВµР В· Р С‘Р С–Р В»РЎвЂ№"
+  enter_flash_mode || die "Р СњР Вµ РЎС“Р Т‘Р В°Р В»Р С•РЎРѓРЎРЉ Р С•РЎвЂљР С—РЎР‚Р В°Р Р†Р С‘РЎвЂљРЎРЉ AT^GODLOAD. Р вЂќР В»РЎРЏ Р Р…Р ВµР СР С•Р Т‘Р С‘РЎвЂћР С‘РЎвЂ Р С‘РЎР‚Р С•Р Р†Р В°Р Р…Р Р…Р С•Р С–Р С• HiLink Р СР С•Р В¶Р ВµРЎвЂљ Р С—Р С•Р Р…Р В°Р Т‘Р С•Р В±Р С‘РЎвЂљРЎРЉРЎРѓРЎРЏ debug mode."
   sleep 4
 
-  stage "wait_serial"
-  wait_dev_any 35 || die "ttyUSB port did not appear after AT^GODLOAD"
-  ls /dev/ttyUSB* 2>/dev/null || true
+  log "Р РЃР В°Р С– 3. Р вЂ“Р Т‘РЎС“ ttyUSB Р С—Р С•РЎРѓР В»Р Вµ GODLOAD"
+  wait_dev_any 30 || die "Р СџР С•РЎРѓР В»Р Вµ AT^GODLOAD Р Р…Р Вµ Р С—Р С•РЎРЏР Р†Р С‘Р В»РЎРѓРЎРЏ ttyUSB"
+  ls /dev/ttyUSB*
 
   local port
-  port="$(choose_flash_port)" || die "failed to choose flash port"
-  log "flash port: ${port}"
+port="$(choose_flash_port_hilink)" || die "Р СњР Вµ РЎС“Р Т‘Р В°Р В»Р С•РЎРѓРЎРЉ Р Р†РЎвЂ№Р В±РЎР‚Р В°РЎвЂљРЎРЉ Р С—Р С•РЎР‚РЎвЂљ Р С—РЎР‚Р С•РЎв‚¬Р С‘Р Р†Р С”Р С‘"
+log "Р СџР С•РЎР‚РЎвЂљ Р С—РЎР‚Р С•РЎв‚¬Р С‘Р Р†Р С”Р С‘: $port"
 
-  if [[ -n "$FULL_FW" ]]; then
-    stage "flash_full"
-    sudo env BALONG_RELAX_DATAMODE=1 "$FLASHBIN" -p "$port" "$FULL_FW"
-  else
-    stage "flash_main"
-    flash_main_no_needle || die "main firmware flash failed"
-    port="$(choose_flash_port || true)"
-    stage "flash_webui"
-    flash_webui_no_needle "$port" || die "WebUI flash failed"
-  fi
+if [[ -n "${FULL_FW:-}" ]]; then
+  log "Р РЃР В°Р С– 4. Р РЃРЎРЉРЎР‹ Р С—Р С•Р В»Р Р…РЎС“РЎР‹ Р С—РЎР‚Р С•РЎв‚¬Р С‘Р Р†Р С”РЎС“ Р С•Р Т‘Р Р…Р С‘Р С РЎвЂћР В°Р в„–Р В»Р С•Р С"
+  sudo env BALONG_RELAX_DATAMODE=1 "$FLASHBIN" -p "$port" "$FULL_FW"
+else
+  log "Р РЃР В°Р С– 4. Р РЃРЎРЉРЎР‹ main РЎРѓ Р С”Р В»РЎР‹РЎвЂЎР С•Р С -k"
+  flash_main_no_needle || die "Main firmware Р Р…Р Вµ Р С—РЎР‚Р С•РЎв‚¬Р С‘Р В»Р В°РЎРѓРЎРЉ Р В±Р ВµР В· Р С‘Р С–Р В»РЎвЂ№"
 
-  stage "flash_reboot"
+  # Р С—Р С•РЎРѓР В»Р Вµ retry main Р В±Р ВµРЎР‚РЎвЂР С Р В°Р С”РЎвЂљРЎС“Р В°Р В»РЎРЉР Р…РЎвЂ№Р в„– Р С—Р С•РЎР‚РЎвЂљ Р ВµРЎвЂ°РЎвЂ РЎР‚Р В°Р В·
+  port="$(choose_flash_port_hilink)" || true
+  log "Р РЃР В°Р С– 5. Р РЃРЎРЉРЎР‹ WebUI РЎРѓ РЎР‚Р ВµРЎвЂљРЎР‚Р В°РЎРЏР СР С‘"
+  flash_webui_no_needle "$port" || die "WebUI Р Р…Р Вµ Р С—РЎР‚Р С•РЎв‚¬Р С‘Р В»Р В°РЎРѓРЎРЉ Р В±Р ВµР В· Р С‘Р С–Р В»РЎвЂ№"
+fi
+
+  log "Р РЃР В°Р С– 6. Р вЂўРЎРѓР В»Р С‘ Р СР С•Р Т‘Р ВµР С Р В·Р В°Р Р†Р С‘РЎРѓ Р Р† Р С—РЎР‚Р С•РЎв‚¬Р С‘Р Р†Р С•РЎвЂЎР Р…Р С•Р С РЎР‚Р ВµР В¶Р С‘Р СР Вµ, Р С—РЎР‚Р С•Р В±РЎС“РЎР‹ -r"
   if [[ -n "${port:-}" && -e "${port:-/dev/null}" ]]; then
     sudo "$FLASHBIN" -p "$port" -r || true
   fi
 
+  log "Р РЃР В°Р С– 7. Р вЂ™Р С•Р В·Р Р†РЎР‚Р В°РЎвЂ°Р В°РЎР‹ РЎРѓР ВµРЎР‚Р Р†Р С‘РЎРѓРЎвЂ№ Р С—Р ВµРЎР‚Р ВµР Т‘ Р С—РЎР‚Р С•Р Р†Р ВµРЎР‚Р С”Р С•Р в„– РЎРѓР ВµРЎвЂљР С‘"
   start_services
   sleep 5
-  recover_network || true
 
-  local base
-  base="$(find_hilink_base_url || true)"
-  if [[ -n "$base" ]]; then
-    verify_target_versions "$base"
+  log "Р РЃР В°Р С– 8. Р СџРЎвЂ№РЎвЂљР В°РЎР‹РЎРѓРЎРЉ Р С—Р С•Р Т‘Р Р…РЎРЏРЎвЂљРЎРЉ РЎРѓР ВµРЎвЂљРЎРЉ Р СР С•Р Т‘Р ВµР СР В°"
+  if recover_network; then
+    log "Р РЋР ВµРЎвЂљРЎРЉ Р С—Р С•Р Т‘Р Р…РЎРЏР В»Р В°РЎРѓРЎРЉ. Р СџРЎР‚Р С•Р В±РЎС“Р в„– http://192.168.8.1 Р С‘ http://192.168.1.1"
   else
-    stage "verify"
-    log "HiLink API not reachable yet; flash commands completed"
+    log "Р СџРЎР‚Р С•РЎв‚¬Р С‘Р Р†Р С”Р В° Р В·Р В°Р Р†Р ВµРЎР‚РЎв‚¬Р ВµР Р…Р В°, Р Р…Р С• РЎРѓР ВµРЎвЂљРЎРЉ Р В°Р Р†РЎвЂљР С•Р СР В°РЎвЂљР С‘РЎвЂЎР ВµРЎРѓР С”Р С‘ Р Р…Р Вµ Р С—Р С•Р Т‘Р Р…РЎРЏР В»Р В°РЎРѓРЎРЉ"
+    log "Р СџРЎР‚Р С•Р Р†Р ВµРЎР‚РЎРЉ Р С‘Р Р…РЎвЂљР ВµРЎР‚РЎвЂћР ВµР в„–РЎРѓ enx/usb/eth Р Р†РЎР‚РЎС“РЎвЂЎР Р…РЎС“РЎР‹"
   fi
 
-  echo "modem_id=${MODEM_ID} ordinal=${ORDINAL} base=${base:-unknown}"
-  stage "completed"
+  log "Р вЂњР С•РЎвЂљР С•Р Р†Р С•"
 }
 
 main "$@"
