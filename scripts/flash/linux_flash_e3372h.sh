@@ -73,6 +73,17 @@ wait_huawei_state() {
   return 1
 }
 
+huawei_net_ifaces() {
+  local iface props
+  while IFS= read -r iface; do
+    [[ -n "$iface" ]] || continue
+    props="$(udevadm info -q property -p "/sys/class/net/${iface}" 2>/dev/null || true)"
+    if printf '%s\n' "$props" | grep -q '^ID_VENDOR_ID=12d1$'; then
+      printf '%s\n' "$iface"
+    fi
+  done < <(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|wwan|eth)' || true)
+}
+
 bring_usbnet_up() {
   local iface
   while IFS= read -r iface; do
@@ -80,7 +91,7 @@ bring_usbnet_up() {
     sudo ip link set "$iface" up 2>/dev/null || true
     sudo ip addr add 192.168.8.100/24 dev "$iface" 2>/dev/null || true
     sudo ip addr add 192.168.1.100/24 dev "$iface" 2>/dev/null || true
-  done < <(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|wwan|eth)' || true)
+  done < <(huawei_net_ifaces)
 }
 
 recover_network() {
@@ -93,7 +104,7 @@ recover_network() {
     sudo ip link set "$iface" up 2>/dev/null || true
     sudo ip route replace 192.168.8.0/24 dev "$iface" 2>/dev/null || true
     sudo ip route replace 192.168.1.0/24 dev "$iface" 2>/dev/null || true
-  done < <(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|wwan|eth)' || true)
+  done < <(huawei_net_ifaces)
   ping -c 2 192.168.8.1 >/dev/null 2>&1 && ok=0
   ping -c 2 192.168.1.1 >/dev/null 2>&1 && ok=0
   return "$ok"
@@ -122,11 +133,74 @@ wait_adb_on_hilink() {
         timeout 4 adb connect "${host}:5555" >/dev/null 2>&1 || true
       fi
     done
-    adb devices | grep -qE '192\.168\.(8|1)\.1:5555' && return 0
+    timeout 4 adb devices | grep -qE '192\.168\.(8|1)\.1:5555' && return 0
     sleep 2
     ((i+=2))
   done
   return 1
+}
+
+enable_hilink_project_mode() {
+  local base="${1:-}"
+  local cookiejar page tokens token response
+
+  [[ -n "$base" ]] || return 1
+  cookiejar="$(mktemp)"
+  page="$(curl -fsS --max-time 10 -b "$cookiejar" -c "$cookiejar" "${base}/html/home.html" 2>/dev/null || true)"
+  tokens="$(printf '%s' "$page" | grep -o 'meta name="csrf_token" content="[^"]*"' | sed 's/.*content="//; s/"$//')"
+  if [[ -z "$tokens" ]]; then
+    rm -f "$cookiejar"
+    return 1
+  fi
+
+  while IFS= read -r token; do
+    [[ -n "$token" ]] || continue
+    response="$(curl -fsS --max-time 15 \
+      -b "$cookiejar" -c "$cookiejar" \
+      -H "__RequestVerificationToken: ${token}" \
+      -H "Content-Type: text/xml" \
+      -H "Referer: ${base}/html/home.html" \
+      -H "X-Requested-With: XMLHttpRequest" \
+      --data '<request><mode>1</mode></request>' \
+      "${base}/api/device/mode" 2>/dev/null || true)"
+    if printf '%s' "$response" | grep -q "<response>OK</response>"; then
+      rm -f "$cookiejar"
+      return 0
+    fi
+  done <<< "$tokens"
+
+  rm -f "$cookiejar"
+  return 1
+}
+
+maybe_bind_option_driver_14dc() {
+  if [[ ! -w /sys/bus/usb-serial/drivers/option1/new_id ]]; then
+    return 0
+  fi
+  sudo modprobe option >/dev/null 2>&1 || true
+  echo "STAGE:bind_option_driver"
+  echo "12d1 14dc" | sudo tee /sys/bus/usb-serial/drivers/option1/new_id >/dev/null 2>&1 || true
+  sleep 3
+}
+
+godload_via_project_mode() {
+  local base
+  bring_usbnet_up
+  sleep 1
+  base="$(find_hilink_base_url || true)"
+  if [[ -z "$base" ]]; then
+    log "HiLink base URL not available for project mode"
+    return 1
+  fi
+  log "enabling HiLink project mode through ${base}"
+  if ! enable_hilink_project_mode "$base"; then
+    log "HiLink project mode API did not return OK"
+    return 1
+  fi
+  sleep 5
+  maybe_bind_option_driver_14dc
+  wait_dev_any 20 || return 1
+  send_godload_any
 }
 
 godload_via_adb() {
@@ -134,9 +208,9 @@ godload_via_adb() {
   for attempt in 1 2 3 4 5; do
     log "ADB/GODLOAD attempt ${attempt}"
     if wait_adb_on_hilink 20; then
-      adb shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
-      adb -s 192.168.8.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
-      adb -s 192.168.1.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+      timeout 4 adb shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+      timeout 4 adb -s 192.168.8.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+      timeout 4 adb -s 192.168.1.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
     fi
     sleep 3
   done
@@ -164,6 +238,7 @@ enter_flash_mode() {
     ensure_hilink_mode 30 || true
   fi
   if lsusb | grep -q '12d1:14dc'; then
+    godload_via_project_mode && return 0
     godload_via_adb && return 0
   fi
   if compgen -G "/dev/ttyUSB*" >/dev/null; then

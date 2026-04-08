@@ -12,7 +12,9 @@ FLASHBIN="${FLASHBIN:-${TOOLS_DIR}/balong_flash_recover}"
 PTABLE="${PTABLE:-${TOOLS_DIR}/ptable-hilink.bin}"
 USBLSAFE="${USBLSAFE:-${TOOLS_DIR}/usblsafe-3372h.bin}"
 MAIN_FW="${MAIN_FW:-${IMAGES_DIR}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin}"
-WEBUI_FW="${WEBUI_FW:-${IMAGES_DIR}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin}"
+# Needle recovery must first restore a bootable HiLink WebUI. The final
+# partner WebUI (17.100.13) is applied later by the live UI flasher.
+WEBUI_FW="${WEBUI_FW:-${IMAGES_DIR}/WEBUI_17.100.18.03.143_HILINK_Mod1.21_BV7R11HS_CPIO.bin}"
 MODE="${1:-f}"
 
 log() { printf '\n[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
