@@ -31,6 +31,14 @@ log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 stage() { printf 'STAGE:%s\n' "$1"; }
 die() { printf 'ERROR:%s\n' "$*" >&2; exit 1; }
 
+sudo() {
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    command "$@"
+  else
+    command sudo "$@"
+  fi
+}
+
 need_cmd() { command -v "$1" >/dev/null 2>&1 || die "missing command: $1"; }
 need_file() { [[ -f "$1" ]] || die "missing file: $1"; }
 

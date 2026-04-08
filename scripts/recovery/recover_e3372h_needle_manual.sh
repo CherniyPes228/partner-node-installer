@@ -25,6 +25,14 @@ die() {
   exit 1
 }
 
+sudo() {
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    command "$@"
+  else
+    command sudo "$@"
+  fi
+}
+
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "РќРµ РЅР°Р№РґРµРЅР° РєРѕРјР°РЅРґР°: $1"
 }
