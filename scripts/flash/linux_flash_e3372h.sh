@@ -114,10 +114,14 @@ ensure_hilink_mode() {
 
 wait_adb_on_hilink() {
   local timeout="${1:-40}" i=0
+  local host
   while (( i < timeout )); do
     bring_usbnet_up
-    adb connect 192.168.8.1:5555 >/dev/null 2>&1 || true
-    adb connect 192.168.1.1:5555 >/dev/null 2>&1 || true
+    for host in 192.168.8.1 192.168.1.1; do
+      if curl -fsS --max-time 2 "http://${host}/api/webserver/SesTokInfo" >/dev/null 2>&1 || ping -c 1 -W 1 "$host" >/dev/null 2>&1; then
+        timeout 4 adb connect "${host}:5555" >/dev/null 2>&1 || true
+      fi
+    done
     adb devices | grep -qE '192\.168\.(8|1)\.1:5555' && return 0
     sleep 2
     ((i+=2))
