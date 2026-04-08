@@ -85,10 +85,28 @@ wait_huawei_state() {
 
 bring_usbnet_up() {
   local iface
-  for iface in $(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|eth)' || true); do
+  for iface in $(huawei_net_interfaces); do
     sudo ip link set "$iface" up 2>/dev/null || true
     sudo ip addr add 192.168.8.100/24 dev "$iface" 2>/dev/null || true
     sudo ip addr add 192.168.1.100/24 dev "$iface" 2>/dev/null || true
+  done
+}
+
+huawei_net_interfaces() {
+  local iface
+  local dev
+  local p
+
+  for iface in $(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|eth)' || true); do
+    dev="$(readlink -f "/sys/class/net/$iface/device" 2>/dev/null || true)"
+    p="$dev"
+    while [[ -n "$p" && "$p" != "/" ]]; do
+      if [[ -r "$p/idVendor" ]] && grep -qi '^12d1$' "$p/idVendor"; then
+        echo "$iface"
+        break
+      fi
+      p="$(dirname "$p")"
+    done
   done
 }
 
@@ -99,7 +117,7 @@ recover_network() {
   bring_usbnet_up
   sleep 2
 
-  for iface in $(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|eth)' || true); do
+  for iface in $(huawei_net_interfaces); do
     sudo ip link set "$iface" up 2>/dev/null || true
     sudo ip route replace 192.168.8.0/24 dev "$iface" 2>/dev/null || true
     sudo ip route replace 192.168.1.0/24 dev "$iface" 2>/dev/null || true
@@ -108,8 +126,8 @@ recover_network() {
   ip -br addr || true
   ip route || true
 
-  ping -c 2 192.168.8.1 >/dev/null 2>&1 && ok=0
-  ping -c 2 192.168.1.1 >/dev/null 2>&1 && ok=0
+  curl -fsS --max-time 5 http://192.168.8.1/api/webserver/SesTokInfo >/dev/null 2>&1 && ok=0
+  curl -fsS --max-time 5 http://192.168.1.1/api/webserver/SesTokInfo >/dev/null 2>&1 && ok=0
 
   return $ok
 }
@@ -364,6 +382,7 @@ fi
   else
     log "Р СџРЎР‚Р С•РЎв‚¬Р С‘Р Р†Р С”Р В° Р В·Р В°Р Р†Р ВµРЎР‚РЎв‚¬Р ВµР Р…Р В°, Р Р…Р С• РЎРѓР ВµРЎвЂљРЎРЉ Р В°Р Р†РЎвЂљР С•Р СР В°РЎвЂљР С‘РЎвЂЎР ВµРЎРѓР С”Р С‘ Р Р…Р Вµ Р С—Р С•Р Т‘Р Р…РЎРЏР В»Р В°РЎРѓРЎРЉ"
     log "Р СџРЎР‚Р С•Р Р†Р ВµРЎР‚РЎРЉ Р С‘Р Р…РЎвЂљР ВµРЎР‚РЎвЂћР ВµР в„–РЎРѓ enx/usb/eth Р Р†РЎР‚РЎС“РЎвЂЎР Р…РЎС“РЎР‹"
+    die "modem web interface did not come back after flashing"
   fi
 
   log "Р вЂњР С•РЎвЂљР С•Р Р†Р С•"
