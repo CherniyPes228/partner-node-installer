@@ -45,6 +45,16 @@ setup_config() {
   mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR"
   chmod 755 "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR"
 
+  # The installer writes a fresh config with empty node credentials. Drop any
+  # persisted credentials from a previous install so bootstrap uses PARTNER_KEY
+  # instead of an old node token.
+  if [[ -f "$DATA_DIR/node_credentials" ]]; then
+    local backup="$DATA_DIR/node_credentials.$(date +%s).bak"
+    log_warn "Existing node credentials found; backing up to $backup and forcing fresh bootstrap"
+    cp "$DATA_DIR/node_credentials" "$backup" || true
+    rm -f "$DATA_DIR/node_credentials"
+  fi
+
   # Create config file
   log_info "Creating $CONFIG_DIR/config.yaml"
   cat > "$CONFIG_DIR/config.yaml" <<EOF

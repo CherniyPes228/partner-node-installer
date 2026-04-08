@@ -166,6 +166,50 @@ autodetect_hilink_base_url() {
   return 1
 }
 
+sync_system_time() {
+  log_info "Checking system clock before bootstrap..."
+
+  if command -v timedatectl >/dev/null 2>&1; then
+    timedatectl set-ntp true >/dev/null 2>&1 || true
+    sleep 2
+  fi
+
+  local main_date=""
+  local main_epoch=""
+  local node_epoch=""
+  local diff=""
+
+  main_date="$(curl -sSI --max-time 5 "${MAIN_SERVER}/api/partner/overview?partner_key=clock_probe" 2>/dev/null | awk -F': ' 'tolower($1)=="date"{print $2}' | tr -d '\r' || true)"
+  if [[ -z "${main_date}" ]]; then
+    log_warn "Could not read MAIN server Date header; skipping clock correction"
+    return 0
+  fi
+
+  if ! main_epoch="$(date -u -d "${main_date}" +%s 2>/dev/null)"; then
+    log_warn "Could not parse MAIN server Date header (${main_date}); skipping clock correction"
+    return 0
+  fi
+  node_epoch="$(date -u +%s)"
+  diff=$(( node_epoch - main_epoch ))
+  if [[ "${diff}" -lt 0 ]]; then
+    diff=$(( -diff ))
+  fi
+
+  if [[ "${diff}" -le 300 ]]; then
+    log_info "System clock is close enough to MAIN server (${diff}s drift)"
+    return 0
+  fi
+
+  log_warn "System clock differs from MAIN server by ${diff}s; correcting from MAIN Date header"
+  if command -v timedatectl >/dev/null 2>&1; then
+    timedatectl set-ntp false >/dev/null 2>&1 || true
+  fi
+  date -u -s "${main_date}" >/dev/null
+  if command -v timedatectl >/dev/null 2>&1; then
+    timedatectl set-ntp true >/dev/null 2>&1 || true
+  fi
+}
+
 main() {
   log_info "╔════════════════════════════════════════════════════════════╗"
   log_info "║     Partner Node Zero-Touch Installer (v2 - Modular)      ║"
@@ -191,6 +235,8 @@ main() {
     log_err "Invalid --ui-port value: $UI_PORT"
     exit 1
   fi
+
+  sync_system_time
 
   # Auto-detect country from IP if not provided
   if [[ -z "$COUNTRY" ]]; then
