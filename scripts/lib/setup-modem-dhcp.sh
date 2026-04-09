@@ -11,22 +11,29 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 NETPLAN_FILE="/etc/netplan/90-auto-modem-dhcp.yaml"
 SETUP_SCRIPT="/usr/local/bin/auto-modem-setup.sh"
+RENDERER="NetworkManager"
+
+if systemctl is-active --quiet NetworkManager 2>/dev/null; then
+  RENDERER="NetworkManager"
+elif systemctl is-active --quiet systemd-networkd 2>/dev/null; then
+  RENDERER="networkd"
+fi
 
 log_info "Configuring auto-DHCP for USB modems..."
 
 # Create netplan configuration for USB modems
 log_info "  Creating netplan config for USB modem auto-DHCP..."
-sudo tee "$NETPLAN_FILE" > /dev/null << 'NETPLAN'
-# Auto-enable DHCP for USB modems (enx* interfaces)
+sudo tee "$NETPLAN_FILE" > /dev/null << NETPLAN
+# Auto-enable DHCP only for Huawei HiLink USB modem interfaces
 # With lower priority than WiFi so PC traffic uses WiFi by default
 # Only 3proxy proxy traffic routes through modem
 network:
   version: 2
-  renderer: networkd
+  renderer: ${RENDERER}
   ethernets:
     usb-modem:
       match:
-        name: "enx*"
+        name: "enx0c5b8f*"
       dhcp4: true
       dhcp6: true
       dhcp4-overrides:
@@ -46,29 +53,30 @@ fi
 
 # Create helper script for manual setup if needed
 log_info "  Creating helper script for manual modem setup..."
-sudo tee "$SETUP_SCRIPT" > /dev/null << 'SCRIPT'
+sudo tee "$SETUP_SCRIPT" > /dev/null << SCRIPT
 #!/bin/bash
-# Auto-configure USB modems with DHCP
-# This script ensures that USB modems (enx* interfaces) always get IP via DHCP
+# Auto-configure Huawei USB modems with DHCP
+# This script ensures that Huawei HiLink modems (enx0c5b8f* interfaces) get IP via DHCP
 # with lower priority than WiFi so PC traffic uses WiFi
 
 set -euo pipefail
 
 NETPLAN_FILE="/etc/netplan/90-auto-modem-dhcp.yaml"
+RENDERER="${RENDERER}"
 
 echo "Setting up auto-DHCP for USB modems..."
 
 # Create netplan config for USB modems
-sudo tee "$NETPLAN_FILE" > /dev/null << 'NETPLAN'
-# Auto-enable DHCP for USB modems (enx* interfaces)
+sudo tee "$NETPLAN_FILE" > /dev/null << NETPLAN
+# Auto-enable DHCP only for Huawei HiLink USB modem interfaces
 # With lower priority than WiFi so PC traffic uses WiFi by default
 network:
   version: 2
-  renderer: networkd
+  renderer: ${RENDERER}
   ethernets:
     usb-modem:
       match:
-        name: "enx*"
+        name: "enx0c5b8f*"
       dhcp4: true
       dhcp6: true
       dhcp4-overrides:
