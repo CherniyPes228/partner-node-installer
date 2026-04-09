@@ -215,6 +215,15 @@ def enrich_overview_with_local_modem_state(overview):
         return overview
 
     by_stable_key, flashed = load_local_modem_registry()
+    registry_items = overview.get("modem_registry", []) or []
+    registry_by_node_imei = {}
+    for item in registry_items:
+        if not isinstance(item, dict):
+            continue
+        node_id = str(item.get("node_id") or item.get("last_seen_node_id") or "").strip()
+        imei = normalize_digits(item.get("imei"))
+        if node_id and imei:
+            registry_by_node_imei[f"{node_id}:{imei}"] = item
 
     def enrich_modem(modem):
         if not isinstance(modem, dict):
@@ -239,16 +248,27 @@ def enrich_overview_with_local_modem_state(overview):
 
         imei = normalize_digits(modem.get("imei"))
         stable_key = f"imei:{imei}" if imei else ""
+        node_imei_key = f"{modem.get('node_id','')}:{imei}" if imei else ""
+        registry_item = registry_by_node_imei.get(node_imei_key) if node_imei_key else None
         local_number = int(by_stable_key.get(stable_key) or 0) if stable_key else 0
         local_flashed = bool(flashed.get(stable_key)) if stable_key else False
 
+        if registry_item:
+            registry_number = int(registry_item.get("modem_number") or 0)
+            if registry_number > 0:
+                modem["modem_number"] = registry_number
+            for field in ("provision_status", "last_seen_node_id", "last_seen_modem_id"):
+                if str(registry_item.get(field) or "").strip():
+                    modem[field] = registry_item[field]
+
         if local_number > 0:
-            modem["modem_number"] = local_number
+            modem["local_modem_number"] = local_number
             if int(modem.get("ordinal") or 0) <= 0:
                 modem["ordinal"] = local_number
 
         if local_flashed:
-            modem["provision_status"] = "ready"
+            if not registry_item or str(registry_item.get("provision_status") or "").strip() != "requires_flash":
+                modem["provision_status"] = "ready"
             if not str(modem.get("provision_notes") or "").strip():
                 modem["provision_notes"] = "known modem for this node"
             if modem_has_target(modem.get("software_version"), modem.get("webui_version")):
@@ -264,9 +284,13 @@ def enrich_overview_with_local_modem_state(overview):
     overview["modems"] = top_level
 
     modem_map = {}
+    active_registry_keys = set()
     for modem in top_level:
         if isinstance(modem, dict):
             modem_map[f"{modem.get('node_id','')}:{modem.get('id','')}"] = modem
+            imei = normalize_digits(modem.get("imei"))
+            if imei:
+                active_registry_keys.add(f"{modem.get('node_id','')}:{imei}")
 
     for node in overview.get("nodes", []) or []:
         if not isinstance(node, dict):
@@ -281,7 +305,88 @@ def enrich_overview_with_local_modem_state(overview):
                 enriched.append(merged)
             else:
                 enriched.append(enrich_modem(modem))
+        node_id = str(node.get("node_id") or "")
+        for item in registry_items:
+            if not isinstance(item, dict):
+                continue
+            item_node = str(item.get("node_id") or item.get("last_seen_node_id") or "").strip()
+            item_imei = normalize_digits(item.get("imei"))
+            if item_node != node_id or not item_imei:
+                continue
+            if f"{item_node}:{item_imei}" in active_registry_keys:
+                continue
+            enriched.append({
+                "id": f"stored-{item.get('modem_number') or item_imei[-4:]}",
+                "ordinal": int(item.get("modem_number") or 0),
+                "modem_number": int(item.get("modem_number") or 0),
+                "node_id": item_node,
+                "country": item.get("last_seen_country") or node.get("country") or "",
+                "node_status": node.get("node_status") or node.get("state") or "",
+                "imei": item.get("imei") or "",
+                "serial_number": item.get("serial_number") or "",
+                "device_name": item.get("device_name") or "E3372",
+                "product_family": item.get("product_family") or "",
+                "hardware_version": item.get("hardware_version") or "",
+                "software_version": item.get("software_version") or "",
+                "webui_version": item.get("webui_version") or "",
+                "state": "offline",
+                "wan_ip": item.get("last_seen_wan_ip") or "",
+                "signal_strength": item.get("last_signal_dbm") or 0,
+                "operator": item.get("last_operator") or "",
+                "technology": item.get("last_technology") or "",
+                "active_sessions": 0,
+                "port": 0,
+                "provision_status": item.get("provision_status") or "new",
+                "provision_notes": "known modem for this node",
+                "client_eligible": False,
+                "traffic_bytes_in": 0,
+                "traffic_bytes_out": 0,
+                "flash_status": "done" if item.get("provision_status") == "ready" else "",
+                "flash_stage": "completed" if item.get("provision_status") == "ready" else "",
+                "flash_message": f"known modem for this node; label remains #{int(item.get('modem_number') or 0)}" if int(item.get("modem_number") or 0) > 0 else "",
+                "last_seen_at": item.get("last_seen_at") or "",
+                "local_base_url": "",
+            })
         node["modems"] = enriched
+
+    for item in registry_items:
+        if not isinstance(item, dict):
+            continue
+        item_node = str(item.get("node_id") or item.get("last_seen_node_id") or "").strip()
+        item_imei = normalize_digits(item.get("imei"))
+        if not item_node or not item_imei or f"{item_node}:{item_imei}" in active_registry_keys:
+            continue
+        overview["modems"].append({
+            "id": f"stored-{item.get('modem_number') or item_imei[-4:]}",
+            "ordinal": int(item.get("modem_number") or 0),
+            "modem_number": int(item.get("modem_number") or 0),
+            "node_id": item_node,
+            "country": item.get("last_seen_country") or "",
+            "node_status": "offline",
+            "imei": item.get("imei") or "",
+            "serial_number": item.get("serial_number") or "",
+            "device_name": item.get("device_name") or "E3372",
+            "product_family": item.get("product_family") or "",
+            "hardware_version": item.get("hardware_version") or "",
+            "software_version": item.get("software_version") or "",
+            "webui_version": item.get("webui_version") or "",
+            "state": "offline",
+            "wan_ip": item.get("last_seen_wan_ip") or "",
+            "signal_strength": item.get("last_signal_dbm") or 0,
+            "operator": item.get("last_operator") or "",
+            "technology": item.get("last_technology") or "",
+            "active_sessions": 0,
+            "port": 0,
+            "provision_status": item.get("provision_status") or "new",
+            "provision_notes": "known modem for this node",
+            "client_eligible": False,
+            "traffic_bytes_in": 0,
+            "traffic_bytes_out": 0,
+            "flash_status": "done" if item.get("provision_status") == "ready" else "",
+            "flash_stage": "completed" if item.get("provision_status") == "ready" else "",
+            "flash_message": f"known modem for this node; label remains #{int(item.get('modem_number') or 0)}" if int(item.get("modem_number") or 0) > 0 else "",
+            "local_base_url": "",
+        })
     return overview
 
 

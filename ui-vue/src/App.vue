@@ -139,6 +139,10 @@ function bytesLabel(value) {
 
 function localModemNumber(modem) {
   if (!modem) return "?"
+  const imeiKey = modem.node_id && modem.imei ? `${modem.node_id}:${modem.imei}` : ""
+  const imeiMapped = imeiKey ? registryByIMEI.value[imeiKey] : null
+  const imeiMappedNumber = Number(imeiMapped?.modem_number || 0)
+  if (Number.isFinite(imeiMappedNumber) && imeiMappedNumber > 0) return imeiMappedNumber
   const registryNumber = Number(modem.modem_number || 0)
   if (Number.isFinite(registryNumber) && registryNumber > 0) return registryNumber
   const ordinal = Number(modem.ordinal || 0)
@@ -277,14 +281,6 @@ function syncFlashOverlayFromOverview() {
         message: terminal.flash_message || "Flash workflow finished.",
       }
       return
-    }
-  }
-  if (flashOverlay.value.open && ["queued", "running"].includes(String(flashOverlay.value.status || "").toLowerCase())) {
-    flashOverlay.value = {
-      ...flashOverlay.value,
-      status: "done",
-      stage: "completed",
-      message: "Flash workflow finished. Refresh the modem table and verify that the target firmware and WebUI versions are shown.",
     }
   }
 }
