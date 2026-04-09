@@ -49,6 +49,10 @@ SPEEDTEST_BYTES = int(os.environ.get("PARTNER_SPEEDTEST_BYTES", "2000000"))
 MODEM_ALIAS_PREFIX = os.environ.get("MODEM_ALIAS_PREFIX", "172.31")
 MODEM_ALIAS_PORT = int(os.environ.get("MODEM_ALIAS_PORT", "80"))
 CONFIG_PATH = os.environ.get("PARTNER_NODE_CONFIG", "/etc/partner-node/config.yaml")
+LOCAL_MODEM_REGISTRY_PATH = os.environ.get("PARTNER_NODE_MODEM_REGISTRY", "/var/lib/partner-node/modem_ordinal_registry.json")
+TARGET_MAIN_VERSION = "22.200.15.00.00"
+TARGET_WEBUI_VERSION = "17.100.13.113.03"
+TARGET_WEBUI_LABEL = "17.100.13.01.03"
 
 ALLOWED = {
     "self_check",
@@ -129,6 +133,158 @@ def ensure_alias_ip(alias_host):
     )
 
 
+def normalize_digits(raw):
+    return "".join(ch for ch in str(raw or "") if ch.isdigit())
+
+
+def modem_has_target(main_version, webui_version):
+    main_version = str(main_version or "").strip()
+    webui_version = str(webui_version or "").strip()
+    if not main_version.startswith(TARGET_MAIN_VERSION):
+        return False
+    return webui_version.startswith(TARGET_WEBUI_VERSION) or TARGET_WEBUI_LABEL in webui_version
+
+
+def load_local_modem_registry():
+    try:
+        with open(LOCAL_MODEM_REGISTRY_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        numbers = data.get("by_stable_key") if isinstance(data, dict) else {}
+        flashed = data.get("flashed") if isinstance(data, dict) else {}
+        return numbers if isinstance(numbers, dict) else {}, flashed if isinstance(flashed, dict) else {}
+    except Exception:
+        return {}, {}
+
+
+def read_hilink_device_info(base_url):
+    base_url = str(base_url or "").strip().rstrip("/")
+    if not base_url:
+        return None
+    try:
+        ses = subprocess.run(
+            ["curl", "-fsS", "--max-time", "5", f"{base_url}/api/webserver/SesTokInfo"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if ses.returncode != 0:
+            return None
+        body = ses.stdout or ""
+        ses_match = re.search(r"<SesInfo>(.*?)</SesInfo>", body, re.S)
+        tok_match = re.search(r"<TokInfo>(.*?)</TokInfo>", body, re.S)
+        if not ses_match or not tok_match:
+            return None
+        info = subprocess.run(
+            [
+                "curl", "-fsS", "--max-time", "5",
+                "-H", f"Cookie: {ses_match.group(1).strip()}",
+                "-H", f"__RequestVerificationToken: {tok_match.group(1).strip()}",
+                f"{base_url}/api/device/information",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if info.returncode != 0:
+            return None
+        text = info.stdout or ""
+        if "<error>" in text:
+            return None
+        fields = {}
+        for tag, key in (
+            ("DeviceName", "device_name"),
+            ("SerialNumber", "serial_number"),
+            ("Imei", "imei"),
+            ("Iccid", "iccid"),
+            ("HardwareVersion", "hardware_version"),
+            ("SoftwareVersion", "software_version"),
+            ("WebUIVersion", "webui_version"),
+            ("ProductFamily", "product_family"),
+        ):
+            match = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.S)
+            if match:
+                fields[key] = match.group(1).strip()
+        fields["local_base_url"] = base_url
+        return fields if fields else None
+    except Exception:
+        return None
+
+
+def enrich_overview_with_local_modem_state(overview):
+    if not isinstance(overview, dict):
+        return overview
+
+    by_stable_key, flashed = load_local_modem_registry()
+
+    def enrich_modem(modem):
+        if not isinstance(modem, dict):
+            return modem
+
+        candidates = []
+        base = str(modem.get("local_base_url") or "").strip().rstrip("/")
+        if base:
+            candidates.append(base)
+        candidates.extend(["http://192.168.8.1", "http://192.168.1.1"])
+
+        info = None
+        for candidate in candidates:
+            info = read_hilink_device_info(candidate)
+            if info:
+                break
+
+        if info:
+            for field in ("imei", "serial_number", "device_name", "iccid", "hardware_version", "software_version", "webui_version", "product_family", "local_base_url"):
+                if str(info.get(field) or "").strip():
+                    modem[field] = info[field]
+
+        imei = normalize_digits(modem.get("imei"))
+        stable_key = f"imei:{imei}" if imei else ""
+        local_number = int(by_stable_key.get(stable_key) or 0) if stable_key else 0
+        local_flashed = bool(flashed.get(stable_key)) if stable_key else False
+
+        if local_number > 0:
+            modem["modem_number"] = local_number
+            if int(modem.get("ordinal") or 0) <= 0:
+                modem["ordinal"] = local_number
+
+        if local_flashed:
+            modem["provision_status"] = "ready"
+            if not str(modem.get("provision_notes") or "").strip():
+                modem["provision_notes"] = "known modem for this node"
+            if modem_has_target(modem.get("software_version"), modem.get("webui_version")):
+                modem["flash_status"] = "done"
+                modem["flash_stage"] = "completed"
+                number = int(modem.get("modem_number") or modem.get("ordinal") or 0)
+                modem["flash_message"] = f"flashing completed; label this modem as #{number} for this node" if number > 0 else "flashing completed"
+        return modem
+
+    top_level = []
+    for modem in overview.get("modems", []) or []:
+        top_level.append(enrich_modem(modem))
+    overview["modems"] = top_level
+
+    modem_map = {}
+    for modem in top_level:
+        if isinstance(modem, dict):
+            modem_map[f"{modem.get('node_id','')}:{modem.get('id','')}"] = modem
+
+    for node in overview.get("nodes", []) or []:
+        if not isinstance(node, dict):
+            continue
+        enriched = []
+        node_id = str(node.get("node_id") or "")
+        for modem in node.get("modems", []) or []:
+            key = f"{node_id}:{modem.get('id','')}" if isinstance(modem, dict) else ""
+            if key and key in modem_map:
+                merged = dict(modem)
+                merged.update(modem_map[key])
+                enriched.append(merged)
+            else:
+                enriched.append(enrich_modem(modem))
+        node["modems"] = enriched
+    return overview
+
+
 def reconcile_aliases(overview):
     ensure_alias_redirect()
     if not isinstance(overview, dict):
@@ -178,6 +334,7 @@ def fetch_overview():
     if isinstance(data, dict):
         data.setdefault("partner_key", PARTNER_KEY)
         data.setdefault("main_server", MAIN_SERVER)
+        enrich_overview_with_local_modem_state(data)
         reconcile_aliases(data)
     return data
 

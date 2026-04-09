@@ -60,6 +60,7 @@ const flashOverlay = ref({
   stage: "",
   message: "",
   label: "",
+  key: "",
 })
 const speedTestTarget = ref("http://speedtest.tele2.net/1MB.zip")
 const speedTestCustomUrl = ref("")
@@ -123,7 +124,7 @@ const simCheckRequiredCount = computed(() => modemBilling.value.filter((item) =>
 const activeNodeId = computed(() => selectedNode.value !== "all" ? selectedNode.value : (nodes.value[0]?.node_id || ""))
 const filteredModems = computed(() => selectedNode.value === "all" ? modems.value : modems.value.filter((item) => item.node_id === selectedNode.value))
 const lastResults = computed(() => commandHistory.value.slice(0, 12))
-const activeFlashModem = computed(() => modems.value.find((item) => ["queued", "running", "done", "failed"].includes(String(item.flash_status || "").toLowerCase())))
+const activeFlashModem = computed(() => modems.value.find((item) => ["queued", "running", "verify"].includes(String(item.flash_status || "").toLowerCase())))
 const TARGET_MAIN_VERSION = "22.200.15.00.00"
 const TARGET_WEBUI_VERSION = "17.100.13.113.03"
 
@@ -168,6 +169,7 @@ function isKnownNodeModem(modem) {
 
 function canFlashLiveModem(modem) {
   if (!modem) return false
+  if (["queued", "running", "verify"].includes(String(modem.flash_status || "").toLowerCase())) return false
   if (!modem.imei && modem.usb_vendor_id === "12d1") return true
   if (isKnownNodeModem(modem)) return false
   return modem.state === "detected" || modem.provision_status === "requires_flash"
@@ -236,8 +238,19 @@ function flashStageLabel(stage, status) {
   return labels[normalizedStage] || (normalizedStatus === "running" ? "Flashing in progress" : "Preparing")
 }
 
-function openFlashOverlay(label, status = "queued", stage = "queued", message = "Safe flash queued. Do not unplug or reconnect the modem until the process finishes.") {
-  flashOverlay.value = { open: true, status, stage, message, label }
+function flashOverlayKeyForModem(modem) {
+  if (!modem) return ""
+  if (modem.node_id && modem.id) return `${modem.node_id}:${modem.id}`
+  if (modem.node_id && modem.imei) return `${modem.node_id}:${modem.imei}`
+  return modem.imei || modem.id || ""
+}
+
+function openFlashOverlay(label, status = "queued", stage = "queued", message = "Safe flash queued. Do not unplug or reconnect the modem until the process finishes.", key = "") {
+  flashOverlay.value = { open: true, status, stage, message, label, key }
+}
+
+function closeFlashOverlay() {
+  flashOverlay.value = { ...flashOverlay.value, open: false }
 }
 
 function syncFlashOverlayFromOverview() {
@@ -250,8 +263,21 @@ function syncFlashOverlayFromOverview() {
       stage: current.flash_stage || "running",
       message: current.flash_message || "Safe flash is running. Do not unplug or reconnect the modem until the process finishes.",
       label,
+      key: flashOverlayKeyForModem(current),
     }
     return
+  }
+  if (flashOverlay.value.open && flashOverlay.value.key) {
+    const terminal = modems.value.find((item) => flashOverlayKeyForModem(item) === flashOverlay.value.key && ["done", "failed"].includes(String(item.flash_status || "").toLowerCase()))
+    if (terminal) {
+      flashOverlay.value = {
+        ...flashOverlay.value,
+        status: terminal.flash_status || "failed",
+        stage: terminal.flash_stage || terminal.flash_status || "failed",
+        message: terminal.flash_message || "Flash workflow finished.",
+      }
+      return
+    }
   }
   if (flashOverlay.value.open && ["queued", "running"].includes(String(flashOverlay.value.status || "").toLowerCase())) {
     flashOverlay.value = {
@@ -556,7 +582,7 @@ async function flashRegistryModem(item) {
   registrySaving.value = (item.node_id && item.imei) ? `${item.node_id}:${item.imei}` : (item.imei || `${item.last_seen_node_id}:${item.last_seen_modem_id}`)
   registryMessage.value = ""
   try {
-    openFlashOverlay(`Modem #${item.modem_number || "?"}${item.last_seen_modem_id ? ` • ${item.last_seen_modem_id}` : ""}`, "queued", "queued")
+    openFlashOverlay(`Modem #${item.modem_number || "?"}${item.last_seen_modem_id ? ` • ${item.last_seen_modem_id}` : ""}`, "queued", "queued", "Safe flash queued. Do not unplug or reconnect the modem until the process finishes.", `${item.last_seen_node_id || item.node_id || ""}:${item.last_seen_modem_id || ""}`)
     const response = await fetch("/api/command", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -593,7 +619,7 @@ async function flashLiveModem(modem) {
   registrySaving.value = key
   registryMessage.value = ""
   try {
-    openFlashOverlay(`#${localModemNumber(modem)} • ${modem.id}${modem.node_id ? ` • ${modem.node_id}` : ""}`, "queued", "queued")
+    openFlashOverlay(`#${localModemNumber(modem)} • ${modem.id}${modem.node_id ? ` • ${modem.node_id}` : ""}`, "queued", "queued", "Safe flash queued. Do not unplug or reconnect the modem until the process finishes.", flashOverlayKeyForModem(modem))
     const response = await fetch("/api/command", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -932,7 +958,7 @@ onBeforeUnmount(() => { closeRealtime(); clearRefreshTimer(); if (fallbackTimer)
               Do not unplug, reconnect, or move the modem to another USB port until the process reaches completed state.
             </p>
           </div>
-          <Button v-if="['done', 'failed'].includes(String(flashOverlay.status || '').toLowerCase())" variant="outline" class="rounded-full" @click="flashOverlay.open = false">Close</Button>
+          <Button v-if="['done', 'failed'].includes(String(flashOverlay.status || '').toLowerCase())" variant="outline" class="rounded-full" @click="closeFlashOverlay()">Close</Button>
         </div>
         <div class="mt-6 space-y-3">
           <div class="flex items-center justify-between gap-3 text-sm">
