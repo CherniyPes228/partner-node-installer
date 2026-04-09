@@ -14,7 +14,7 @@ FLASH_ROOT="${FLASH_ROOT:-/opt/partner-node-flash}"
 FLASH_SCRIPT_PATH="${MODEM_FLASH_SCRIPT_PATH:-/usr/local/sbin/partner-node-flash-e3372h.sh}"
 MANUAL_RECOVERY_PATH="${MODEM_NEEDLE_RECOVERY_PATH:-/usr/local/sbin/recover-e3372h-needle}"
 INSTALLER_RAW_BASE_URL="${INSTALLER_RAW_BASE_URL:-https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main}"
-FLASH_SCRIPT_SOURCE_BASE_URL="${FLASH_SCRIPT_SOURCE_BASE_URL:-https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/d12b85aab2517829a7f3a470720657079e3a46b0}"
+FLASH_SCRIPT_SOURCE_BASE_URL="${FLASH_SCRIPT_SOURCE_BASE_URL:-${INSTALLER_RAW_BASE_URL}}"
 
 write_flash_script() {
   download_asset "${FLASH_SCRIPT_SOURCE_BASE_URL}/scripts/flash/linux_flash_e3372h.sh" "${FLASH_SCRIPT_PATH}"
