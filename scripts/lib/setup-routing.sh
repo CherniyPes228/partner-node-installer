@@ -11,12 +11,12 @@ setup_routing() {
 
   log_info "Setting up routing: system via WiFi/Ethernet, proxy via modem"
 
-  # Find modem interfaces (USB modems typically have enx* names)
+  # Find Huawei HiLink modem interfaces only
   local modem_interfaces
-  modem_interfaces=$(ip link 2>/dev/null | grep "enx" | awk '{print $2}' | sed 's/:$//' || true)
+  modem_interfaces=$(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep '^enx0c5b8f' || true)
 
   if [[ -z "$modem_interfaces" ]]; then
-    log_warn "No modem interfaces (enx*) detected. Routing setup skipped."
+    log_warn "No Huawei HiLink modem interfaces (enx0c5b8f*) detected. Routing setup skipped."
     return 0
   fi
 
@@ -40,9 +40,9 @@ setup_routing() {
 # Enforce WiFi as default route (not modem)
 # This script runs every minute via cron to prevent DHCP from adding modem routes
 
-# Remove any default routes from modem interfaces (enx*)
-if ip route show 2>/dev/null | grep -q 'default via.*enx'; then
-  ip route show 2>/dev/null | grep 'default via.*enx' | while read route; do
+# Remove any default routes from Huawei modem interfaces only
+if ip route show 2>/dev/null | grep -q 'default via.*enx0c5b8f'; then
+  ip route show 2>/dev/null | grep 'default via.*enx0c5b8f' | while read route; do
     ip route del $route 2>/dev/null || true
   done
   echo "[$(date)] Removed modem default route" >> /var/log/modem-routing.log 2>&1 || true
@@ -56,7 +56,7 @@ fi
 
 # Build source-based routing for modem-side IPs so 3proxy traffic bound to
 # the local HiLink address leaves through the modem instead of WiFi.
-for iface in $(ip -o link show | awk -F': ' '{print $2}' | grep '^enx' || true); do
+for iface in $(ip -o link show | awk -F': ' '{print $2}' | grep '^enx0c5b8f' || true); do
   local_ip=$(ip -4 -o addr show dev "$iface" scope global 2>/dev/null | awk '{print $4}' | head -n 1 | cut -d/ -f1)
   [ -z "$local_ip" ] && continue
 
