@@ -21,6 +21,12 @@ fi
 
 log_info "Configuring auto-DHCP for USB modems..."
 
+HUAWEI_MODEM_IFACES=$(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep '^enx0c5b8f' || true)
+if [[ -z "${HUAWEI_MODEM_IFACES}" ]]; then
+  log_info "  No Huawei HiLink modem interfaces (enx0c5b8f*) detected, skipping auto-DHCP setup."
+  exit 0
+fi
+
 # Create netplan configuration for USB modems
 log_info "  Creating netplan config for USB modem auto-DHCP..."
 sudo tee "$NETPLAN_FILE" > /dev/null << NETPLAN
