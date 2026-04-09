@@ -61,6 +61,7 @@ const flashOverlay = ref({
   message: "",
   label: "",
   key: "",
+  startedAt: 0,
 })
 const speedTestTarget = ref("http://speedtest.tele2.net/1MB.zip")
 const speedTestCustomUrl = ref("")
@@ -208,6 +209,7 @@ function flashProgressPercent(stage, status) {
     flash_webui: 88,
     flash_reboot: 92,
     rebooting: 92,
+    dispatched: 50,
     post_flash: 94,
     recover_network: 95,
     verify: 98,
@@ -233,6 +235,7 @@ function flashStageLabel(stage, status) {
     flash_webui: "Writing WebUI",
     flash_reboot: "Rebooting modem",
     rebooting: "Rebooting modem",
+    dispatched: "Modem sent to flash",
     post_flash: "Post-flash recovery",
     recover_network: "Restoring modem network",
     verify: "Verifying final versions",
@@ -250,11 +253,22 @@ function flashOverlayKeyForModem(modem) {
 }
 
 function openFlashOverlay(label, status = "queued", stage = "queued", message = "Safe flash queued. Do not unplug or reconnect the modem until the process finishes.", key = "") {
-  flashOverlay.value = { open: true, status, stage, message, label, key }
+  flashOverlay.value = { open: true, status, stage, message, label, key, startedAt: Date.now() }
 }
 
 function closeFlashOverlay() {
   flashOverlay.value = { ...flashOverlay.value, open: false }
+}
+
+function canConfirmFlashCompletion(modem) {
+  if (!modem) return false
+  const elapsedMs = flashOverlay.value.startedAt ? Date.now() - Number(flashOverlay.value.startedAt || 0) : 0
+  if (elapsedMs < 45000) return false
+  const baseUrl = String(modem.local_base_url || "").trim()
+  const provision = String(modem.provision_status || "").trim().toLowerCase()
+  const software = String(modem.software_version || "").trim()
+  const webui = String(modem.webui_version || "").trim()
+  return Boolean(baseUrl && provision === "ready" && software && webui)
 }
 
 function syncFlashOverlayFromOverview() {
@@ -274,6 +288,16 @@ function syncFlashOverlayFromOverview() {
   if (flashOverlay.value.open && flashOverlay.value.key) {
     const terminal = modems.value.find((item) => flashOverlayKeyForModem(item) === flashOverlay.value.key && ["done", "failed"].includes(String(item.flash_status || "").toLowerCase()))
     if (terminal) {
+      if (String(terminal.flash_status || "").toLowerCase() === "done" && !canConfirmFlashCompletion(terminal)) {
+        flashOverlay.value = {
+          ...flashOverlay.value,
+          open: true,
+          status: "running",
+          stage: "dispatched",
+          message: "Modem sent to flash. Waiting for the modem to come back and for WebUI to answer before marking the process complete.",
+        }
+        return
+      }
       flashOverlay.value = {
         ...flashOverlay.value,
         status: terminal.flash_status || "failed",
