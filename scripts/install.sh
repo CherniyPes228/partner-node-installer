@@ -2010,7 +2010,7 @@ main() {
   bash <(curl -fsSL "$routing_script_url") || log_warn "Routing setup failed, continuing..."
 
   write_systemd_unit
-  # write_flash_script  # Disabled - modem flashing not yet tested
+  write_flash_script
   start_service
   write_partner_ui_files
   write_partner_ui_env
