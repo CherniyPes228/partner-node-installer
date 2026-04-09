@@ -26,6 +26,7 @@ setup_dependencies() {
         wget \
         git \
         jq \
+        adb \
         net-tools \
         iproute2 \
         openssl \
@@ -51,6 +52,7 @@ setup_dependencies() {
         wget \
         git \
         jq \
+        android-tools \
         net-tools \
         iproute \
         openssl \
@@ -75,6 +77,7 @@ setup_dependencies() {
         wget \
         git \
         jq \
+        android-tools \
         net-tools \
         iproute2 \
         openssl \

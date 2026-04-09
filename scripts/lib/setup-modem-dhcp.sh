@@ -108,11 +108,11 @@ SCRIPT
 
 sudo chmod +x "$SETUP_SCRIPT"
 
-# Apply netplan configuration
-log_info "  Applying netplan configuration..."
-sudo netplan apply || {
-  log_warn "netplan apply failed, will try again on next boot"
-}
+# Do not apply netplan during installer run.
+# On desktop systems this can transiently restart networking and kill DNS/SSH
+# mid-install. The config is already written and will be picked up on reboot
+# or when the user explicitly runs the helper after plugging a Huawei modem.
+log_info "  Netplan config written; skipping netplan apply during install to avoid disrupting active network connectivity."
 
 # Ensure /etc/3proxy is writable
 log_info "  Ensuring /etc/3proxy directory permissions..."
