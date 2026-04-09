@@ -267,11 +267,15 @@ def enrich_overview_with_local_modem_state(overview):
                 modem["ordinal"] = local_number
 
         if local_flashed:
-            if not registry_item or str(registry_item.get("provision_status") or "").strip() != "requires_flash":
+            registry_requires_flash = bool(registry_item) and str(registry_item.get("provision_status") or "").strip() == "requires_flash"
+            active_flash_status = str(modem.get("flash_status") or "").strip().lower()
+            active_flash_stage = str(modem.get("flash_stage") or "").strip().lower()
+            flash_still_running = active_flash_status in ("queued", "running") or active_flash_stage in ("queued", "verify")
+            if not registry_requires_flash:
                 modem["provision_status"] = "ready"
-            if not str(modem.get("provision_notes") or "").strip():
-                modem["provision_notes"] = "known modem for this node"
-            if modem_has_target(modem.get("software_version"), modem.get("webui_version")):
+                if not str(modem.get("provision_notes") or "").strip():
+                    modem["provision_notes"] = "known modem for this node"
+            if not registry_requires_flash and not flash_still_running and modem_has_target(modem.get("software_version"), modem.get("webui_version")):
                 modem["flash_status"] = "done"
                 modem["flash_stage"] = "completed"
                 number = int(modem.get("modem_number") or modem.get("ordinal") or 0)
