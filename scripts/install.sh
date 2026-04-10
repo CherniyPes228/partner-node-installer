@@ -11,7 +11,7 @@ set -euo pipefail
 PARTNER_KEY=""
 COUNTRY=""
 MAIN_SERVER=""
-BINARY_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.3.0"
+BINARY_URL="https://raw.githubusercontent.com/CherniyPes228/moderation_chat/main/public/downloads/partner-node/node-agent-linux-amd64-v0.3.0"
 BINARY_URL_EXPLICIT="false"
 DOCTOR_BINARY_URL=""
 MODEM_ROTATION_METHOD="auto" # auto|mmcli|api
