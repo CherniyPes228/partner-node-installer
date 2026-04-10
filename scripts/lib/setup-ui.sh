@@ -271,6 +271,41 @@ def finalize_overview_shape(overview):
     overview.setdefault("modem_registry", [])
     nodes = overview.get("nodes") or []
     modems = overview.get("modems") or []
+    if not modems:
+        flattened = []
+        seen = set()
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            for modem in node.get("modems", []) or []:
+                if not isinstance(modem, dict):
+                    continue
+                key = (
+                    str(modem.get("node_id") or node.get("node_id") or "").strip(),
+                    normalize_digits(modem.get("imei")) or str(modem.get("id") or "").strip(),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                flattened.append(modem)
+        if flattened:
+            modems = flattened
+            overview["modems"] = flattened
+    if nodes:
+        best_node = None
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            if best_node is None:
+                best_node = node
+            if str(node.get("node_status") or "").strip() == "online":
+                best_node = node
+                break
+        if isinstance(best_node, dict):
+            overview["node_id"] = str(overview.get("node_id") or best_node.get("node_id") or "")
+            overview["node_status"] = str(best_node.get("node_status") or best_node.get("state") or overview.get("node_status") or "")
+            if str(best_node.get("last_heartbeat_at") or "").strip():
+                overview["last_heartbeat_at"] = best_node.get("last_heartbeat_at")
     ready_count = 0
     requires_flash_count = 0
     offline_count = 0
@@ -580,6 +615,10 @@ def inject_local_runtime_state(overview):
             nodes.append(node_entry)
         else:
             node_entry["node_status"] = local_status
+        overview["node_id"] = node_id
+        overview["node_status"] = local_status
+        if local_status == "online":
+            overview["last_heartbeat_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
     if not local_modem or not node_id:
         return finalize_overview_shape(overview)
