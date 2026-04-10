@@ -101,6 +101,7 @@ run_preclean_uninstall() {
   }
   rm -rf "${LIB_DIR}" 2>/dev/null || true
   mkdir -p "${LIB_DIR}"
+  download_file "https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/lib/common.sh" "${LIB_DIR}/common.sh"
 }
 
 parse_args() {
@@ -301,7 +302,7 @@ main() {
   # Download all lib scripts (for pipe mode)
   log_info "Downloading setup scripts..."
   for script in setup-dependencies setup-3proxy setup-node-agent setup-config setup-systemd setup-routing setup-modem-dhcp setup-flash setup-ssh setup-ui; do
-    curl -fsSL "https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/lib/$script.sh" -o "$LIB_DIR/$script.sh" 2>/dev/null || {
+    download_file "https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/lib/$script.sh" "$LIB_DIR/$script.sh" || {
       log_err "Failed to download $script.sh"
       ((failed++))
     }
