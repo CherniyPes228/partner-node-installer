@@ -250,14 +250,12 @@ choose_flash_port_hilink() {
 
 stop_services() {
   stage "stop_services"
-  log "Stopping ModemManager and NetworkManager"
+  log "Stopping ModemManager"
   sudo systemctl stop ModemManager 2>/dev/null || true
-  sudo systemctl stop NetworkManager 2>/dev/null || true
 }
 
 start_services() {
-  log "Starting NetworkManager and ModemManager"
-  sudo systemctl start NetworkManager 2>/dev/null || true
+  log "Starting ModemManager"
   sudo systemctl start ModemManager 2>/dev/null || true
 }
 
