@@ -7,6 +7,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local/bin}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/partner-node}"
+DATA_DIR="${DATA_DIR:-/var/lib/partner-node}"
 LOG_DIR="${LOG_DIR:-/var/log/partner-node}"
 SERVICE_NAME="${SERVICE_NAME:-partner-node}"
 
@@ -15,7 +16,7 @@ setup_systemd() {
 
   log_info "Setting up systemd units..."
 
-  mkdir -p /etc/systemd/system
+  mkdir -p /etc/systemd/system "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR" /etc/3proxy /var/log/3proxy
 
   # Create wrapper script for node-agent (ensures WiFi is default route)
   log_info "Creating node-agent wrapper script (for routing fix)"

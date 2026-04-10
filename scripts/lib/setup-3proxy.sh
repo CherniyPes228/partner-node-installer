@@ -58,8 +58,9 @@ setup_3proxy() {
     fi
   fi
 
-  mkdir -p /etc/3proxy
+  mkdir -p /etc/3proxy /var/log/3proxy
   chmod 755 /etc/3proxy
+  chmod 755 /var/log/3proxy
 
   cat > /etc/3proxy/3proxy.conf <<'EOF'
 # 3proxy configuration
