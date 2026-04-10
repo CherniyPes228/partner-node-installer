@@ -99,6 +99,8 @@ run_preclean_uninstall() {
     log_err "Pre-install cleanup failed"
     exit 1
   }
+  rm -rf "${LIB_DIR}" 2>/dev/null || true
+  mkdir -p "${LIB_DIR}"
 }
 
 parse_args() {
