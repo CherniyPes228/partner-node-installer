@@ -31,8 +31,8 @@ const loading = ref(false)
 const refreshError = ref("")
 const commandMessage = ref("")
 const quickMessage = ref("")
-const realtimeState = ref("connecting")
-const realtimeNote = ref("Connecting live channel...")
+const realtimeState = ref("offline")
+const realtimeNote = ref("Waiting for local node overview...")
 const lastRealtimeAt = ref("")
 const commandType = ref("self_check")
 const timeoutSec = ref("120")
@@ -392,6 +392,10 @@ async function loadOverview(showLoader = true) {
     connectRealtime()
   } catch (error) {
     refreshError.value = error instanceof Error ? error.message : "refresh failed"
+    if (realtimeState.value !== "active") {
+      realtimeState.value = "warning"
+      realtimeNote.value = "Local overview request failed, retrying with periodic polling."
+    }
   } finally { loading.value = false }
 }
 
