@@ -9,7 +9,18 @@ FLASHBIN="$TOOLS_DIR/balong_flash_recover"
 PTABLE="$TOOLS_DIR/ptable-hilink.bin"
 USBLSAFE="$TOOLS_DIR/usblsafe-3372h.bin"
 
-MAIN_FW="$IMAGES_DIR/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin"
+MAIN_FW="${MAIN_FW:-}"
+if [[ -z "$MAIN_FW" ]]; then
+  for candidate in \
+    "$IMAGES_DIR/E3372h-153_Update_22.200.15.00.00_M_AT_05.10.bin" \
+    "$IMAGES_DIR/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin"
+  do
+    if [[ -f "$candidate" ]]; then
+      MAIN_FW="$candidate"
+      break
+    fi
+  done
+fi
 WEBUI_FW="$IMAGES_DIR/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin"
 
 # f = Р±РµР· СЃС‚РёСЂР°РЅРёСЏ РїСЃРµРІРґРѕ Р±СЌРґ-Р±Р»РѕРєРѕРІ
