@@ -184,6 +184,7 @@ main() {
 
   remove_if_exists "/etc/netplan/90-auto-modem-dhcp.yaml"
   remove_if_exists "/etc/netplan/99-modem-disable.yaml"
+  remove_if_exists "/etc/NetworkManager/dispatcher.d/90-huawei-modem-routing"
   remove_if_exists "/etc/cron.hourly/partner-node-fs-health"
   remove_if_exists "/var/log/modem-routing.log"
   remove_if_exists "/etc/sudoers.d/partner-node-support"

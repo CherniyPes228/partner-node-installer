@@ -24,6 +24,9 @@ setup_systemd() {
 #!/bin/bash
 # Pre-start hook for node-agent.
 # Keep this conservative: only run the Huawei-only enforcement helper when present.
+if [[ -x /usr/local/bin/auto-modem-setup.sh ]]; then
+  /usr/local/bin/auto-modem-setup.sh >/dev/null 2>&1 || true
+fi
 if [[ -x /usr/local/bin/enforce-wifi-routing.sh ]]; then
   /usr/local/bin/enforce-wifi-routing.sh >/dev/null 2>&1 || true
 fi

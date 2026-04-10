@@ -11,25 +11,29 @@ setup_routing() {
 
   log_info "Setting up routing: system via WiFi/Ethernet, proxy via modem"
 
-  # Find Huawei HiLink modem interfaces only
   local modem_interfaces
-  modem_interfaces=$(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep '^enx0c5b8f' || true)
+  modem_interfaces=""
+  for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}'); do
+    [[ "$iface" == "lo" ]] && continue
+    local path vendor
+    path=$(readlink -f "/sys/class/net/$iface/device" 2>/dev/null || true)
+    while [[ -n "$path" && "$path" != "/" ]]; do
+      if [[ -f "$path/idVendor" ]]; then
+        vendor=$(tr '[:upper:]' '[:lower:]' < "$path/idVendor" 2>/dev/null || true)
+        if [[ "$vendor" == "12d1" ]]; then
+          modem_interfaces+="${iface}"$'\n'
+        fi
+        break
+      fi
+      path=$(dirname "$path")
+    done
+  done
 
   if [[ -z "$modem_interfaces" ]]; then
-    log_warn "No Huawei HiLink modem interfaces (enx0c5b8f*) detected. Routing setup skipped."
-    return 0
+    log_info "No Huawei modem interfaces detected right now. Installing routing enforcement for future modem insertions."
+  else
+    log_info "Found Huawei modem interface(s): $(echo "$modem_interfaces" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
   fi
-
-  log_info "Found modem interface(s): $modem_interfaces"
-
-  # Remove all current default routes from modems
-  for iface in $modem_interfaces; do
-    log_info "Removing default route from modem interface: $iface"
-    while IFS= read -r route; do
-      [[ -z "$route" ]] && continue
-      ip route del $route 2>/dev/null || true
-    done < <(ip route show 2>/dev/null | grep "^default" | grep "$iface" || true)
-  done
 
   # Create enforcement script (runs via cron every minute)
   log_info "Creating routing enforcement script"
@@ -38,15 +42,54 @@ setup_routing() {
   cat > /usr/local/bin/enforce-wifi-routing.sh <<'ENFORCEMENT_SCRIPT'
 #!/bin/bash
 # Enforce WiFi as default route (not modem)
-# This script runs every minute via cron to prevent DHCP from adding modem routes
+# This script runs every minute via cron and can also be triggered on demand.
 
-# Remove any default routes from Huawei modem interfaces only
-if ip route show 2>/dev/null | grep -q 'default via.*enx0c5b8f'; then
-  ip route show 2>/dev/null | grep 'default via.*enx0c5b8f' | while read route; do
-    ip route del $route 2>/dev/null || true
+is_huawei_iface() {
+  local iface="$1"
+  local path vendor
+  path=$(readlink -f "/sys/class/net/$iface/device" 2>/dev/null || true)
+  while [[ -n "$path" && "$path" != "/" ]]; do
+    if [[ -f "$path/idVendor" ]]; then
+      vendor=$(tr '[:upper:]' '[:lower:]' < "$path/idVendor" 2>/dev/null || true)
+      [[ "$vendor" == "12d1" ]]
+      return
+    fi
+    path=$(dirname "$path")
   done
-  echo "[$(date)] Removed modem default route" >> /var/log/modem-routing.log 2>&1 || true
-fi
+  return 1
+}
+
+list_huawei_ifaces() {
+  local iface
+  for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}'); do
+    [[ "$iface" == "lo" ]] && continue
+    if is_huawei_iface "$iface"; then
+      echo "$iface"
+    fi
+  done
+}
+
+cleanup_stale_non_huawei_ips() {
+  local iface
+  for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}'); do
+    [[ "$iface" == "lo" ]] && continue
+    if is_huawei_iface "$iface"; then
+      continue
+    fi
+    ip addr del 192.168.8.100/24 dev "$iface" 2>/dev/null || true
+    ip addr del 192.168.1.100/24 dev "$iface" 2>/dev/null || true
+  done
+}
+
+cleanup_stale_non_huawei_ips
+
+for iface in $(list_huawei_ifaces); do
+  while IFS= read -r route; do
+    [[ -z "$route" ]] && continue
+    ip route del $route 2>/dev/null || true
+    echo "[$(date)] Removed modem default route from $iface: $route" >> /var/log/modem-routing.log 2>&1 || true
+  done < <(ip route show default dev "$iface" 2>/dev/null || true)
+done
 
 # Ensure at least one WiFi/Ethernet default route exists
 if ! ip route show 2>/dev/null | grep -q 'default via'; then
@@ -56,7 +99,7 @@ fi
 
 # Build source-based routing for modem-side IPs so 3proxy traffic bound to
 # the local HiLink address leaves through the modem instead of WiFi.
-for iface in $(ip -o link show | awk -F': ' '{print $2}' | grep '^enx0c5b8f' || true); do
+for iface in $(list_huawei_ifaces); do
   local_ip=$(ip -4 -o addr show dev "$iface" scope global 2>/dev/null | awk '{print $4}' | head -n 1 | cut -d/ -f1)
   [ -z "$local_ip" ] && continue
 

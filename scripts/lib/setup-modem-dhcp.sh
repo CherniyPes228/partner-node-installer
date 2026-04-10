@@ -2,117 +2,123 @@
 set -euo pipefail
 
 ###############################################################################
-# Setup USB Modem Auto-DHCP Configuration
-# Ensures USB modems (enx* interfaces) automatically get IP via DHCP
-# when plugged in or reconnected
+# Setup USB modem routing policy
+# Keeps Huawei HiLink modems managed but prevents them from stealing
+# the host default route. Only proxy/source-bound traffic should leave
+# through the modem interface.
 ###############################################################################
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
-NETPLAN_FILE="/etc/netplan/90-auto-modem-dhcp.yaml"
 SETUP_SCRIPT="/usr/local/bin/auto-modem-setup.sh"
-RENDERER="NetworkManager"
+NM_DISPATCHER="/etc/NetworkManager/dispatcher.d/90-huawei-modem-routing"
 
-if systemctl is-active --quiet NetworkManager 2>/dev/null; then
-  RENDERER="NetworkManager"
-elif systemctl is-active --quiet systemd-networkd 2>/dev/null; then
-  RENDERER="networkd"
-fi
+log_info "Configuring USB modem routing policy..."
 
-log_info "Configuring auto-DHCP for USB modems..."
-
-HUAWEI_MODEM_IFACES=$(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | grep '^enx0c5b8f' || true)
-if [[ -z "${HUAWEI_MODEM_IFACES}" ]]; then
-  log_info "  No Huawei HiLink modem interfaces (enx0c5b8f*) detected, skipping auto-DHCP setup."
-  exit 0
-fi
-
-# Create netplan configuration for USB modems
-log_info "  Creating netplan config for USB modem auto-DHCP..."
-sudo tee "$NETPLAN_FILE" > /dev/null << NETPLAN
-# Auto-enable DHCP only for Huawei HiLink USB modem interfaces
-# With lower priority than WiFi so PC traffic uses WiFi by default
-# Only 3proxy proxy traffic routes through modem
-network:
-  version: 2
-  renderer: ${RENDERER}
-  ethernets:
-    usb-modem:
-      match:
-        name: "enx0c5b8f*"
-      dhcp4: true
-      dhcp6: true
-      dhcp4-overrides:
-        route-metric: 1000  # Higher than WiFi (600), so WiFi is preferred
-      dhcp6-overrides:
-        route-metric: 1000
-NETPLAN
-
-# Fix permissions (netplan requires strict permissions)
-sudo chmod 600 "$NETPLAN_FILE"
-
-# Remove old config that disabled DHCP (if it exists from previous installations)
-if [[ -f "/etc/netplan/99-modem-disable.yaml" ]]; then
-  log_info "  Removing old modem-disable config..."
-  sudo rm -f "/etc/netplan/99-modem-disable.yaml"
-fi
-
-# Create helper script for manual setup if needed
-log_info "  Creating helper script for manual modem setup..."
-sudo tee "$SETUP_SCRIPT" > /dev/null << SCRIPT
+log_info "  Creating helper script for Huawei modem setup..."
+sudo tee "$SETUP_SCRIPT" > /dev/null << 'SCRIPT'
 #!/bin/bash
-# Auto-configure Huawei USB modems with DHCP
-# This script ensures that Huawei HiLink modems (enx0c5b8f* interfaces) get IP via DHCP
-# with lower priority than WiFi so PC traffic uses WiFi
-
 set -euo pipefail
 
-NETPLAN_FILE="/etc/netplan/90-auto-modem-dhcp.yaml"
-RENDERER="${RENDERER}"
+is_huawei_iface() {
+  local iface="$1"
+  local path vendor
+  path=$(readlink -f "/sys/class/net/$iface/device" 2>/dev/null || true)
+  while [[ -n "$path" && "$path" != "/" ]]; do
+    if [[ -f "$path/idVendor" ]]; then
+      vendor=$(tr '[:upper:]' '[:lower:]' < "$path/idVendor" 2>/dev/null || true)
+      [[ "$vendor" == "12d1" ]]
+      return
+    fi
+    path=$(dirname "$path")
+  done
+  return 1
+}
 
-echo "Setting up auto-DHCP for USB modems..."
+list_huawei_ifaces() {
+  local iface
+  for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}'); do
+    [[ "$iface" == "lo" ]] && continue
+    if is_huawei_iface "$iface"; then
+      echo "$iface"
+    fi
+  done
+}
 
-# Create netplan config for USB modems
-sudo tee "$NETPLAN_FILE" > /dev/null << NETPLAN
-# Auto-enable DHCP only for Huawei HiLink USB modem interfaces
-# With lower priority than WiFi so PC traffic uses WiFi by default
-network:
-  version: 2
-  renderer: ${RENDERER}
-  ethernets:
-    usb-modem:
-      match:
-        name: "enx0c5b8f*"
-      dhcp4: true
-      dhcp6: true
-      dhcp4-overrides:
-        route-metric: 1000
-      dhcp6-overrides:
-        route-metric: 1000
-NETPLAN
+cleanup_stale_non_huawei_ips() {
+  local iface
+  for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}'); do
+    [[ "$iface" == "lo" ]] && continue
+    if is_huawei_iface "$iface"; then
+      continue
+    fi
+    ip addr del 192.168.8.100/24 dev "$iface" 2>/dev/null || true
+    ip addr del 192.168.1.100/24 dev "$iface" 2>/dev/null || true
+  done
+}
 
-# Fix permissions
-sudo chmod 600 "$NETPLAN_FILE"
+configure_nm_connection() {
+  local iface="$1"
+  local conn
 
-# Remove old configs that disable modems
-sudo rm -f /etc/netplan/99-modem-disable.yaml
+  nmcli device set "$iface" managed yes >/dev/null 2>&1 || true
+  conn=$(nmcli -g GENERAL.CONNECTION device show "$iface" 2>/dev/null | head -n 1 | tr -d '\r' || true)
+  if [[ -z "$conn" || "$conn" == "--" ]]; then
+    nmcli device connect "$iface" >/dev/null 2>&1 || true
+    conn=$(nmcli -g GENERAL.CONNECTION device show "$iface" 2>/dev/null | head -n 1 | tr -d '\r' || true)
+  fi
 
-# Apply netplan
-echo "Applying netplan configuration..."
-sudo netplan apply
+  if [[ -n "$conn" && "$conn" != "--" ]]; then
+    nmcli connection modify "$conn" \
+      ipv4.never-default yes \
+      ipv6.never-default yes \
+      ipv4.route-metric 1000 \
+      ipv6.route-metric 1000 \
+      connection.autoconnect yes >/dev/null 2>&1 || true
+    nmcli device reapply "$iface" >/dev/null 2>&1 || true
+  fi
+}
 
-echo "✅ USB modem auto-DHCP configured!"
-echo "   USB modems will now automatically get IP when plugged in"
-echo "   Test: plug in modem, wait 2-3 seconds, run: ip addr show enx*"
+cleanup_stale_non_huawei_ips
+
+if command -v nmcli >/dev/null 2>&1; then
+  for iface in $(list_huawei_ifaces); do
+    configure_nm_connection "$iface"
+  done
+fi
+
+if [[ -x /usr/local/bin/enforce-wifi-routing.sh ]]; then
+  /usr/local/bin/enforce-wifi-routing.sh >/dev/null 2>&1 || true
+fi
+
+echo "OK: Huawei modem routing policy refreshed"
 SCRIPT
-
 sudo chmod +x "$SETUP_SCRIPT"
 
-# Do not apply netplan during installer run.
-# On desktop systems this can transiently restart networking and kill DNS/SSH
-# mid-install. The config is already written and will be picked up on reboot
-# or when the user explicitly runs the helper after plugging a Huawei modem.
-log_info "  Netplan config written; skipping netplan apply during install to avoid disrupting active network connectivity."
+if systemctl is-active --quiet NetworkManager 2>/dev/null; then
+  log_info "  Creating NetworkManager dispatcher for Huawei modem routing..."
+  sudo mkdir -p "$(dirname "$NM_DISPATCHER")"
+  sudo tee "$NM_DISPATCHER" > /dev/null << 'DISPATCHER'
+#!/bin/bash
+set -euo pipefail
+
+action="${2:-}"
+
+case "$action" in
+  up|dhcp4-change|dhcp6-change|connectivity-change|reapply|vpn-up|hostname)
+    /usr/local/bin/auto-modem-setup.sh >/dev/null 2>&1 || true
+    ;;
+esac
+DISPATCHER
+  sudo chmod +x "$NM_DISPATCHER"
+  log_info "  NetworkManager dispatcher installed."
+else
+  log_info "  NetworkManager is not active; only manual helper installed."
+fi
+
+# Remove old netplan-based behavior. NetworkManager/dispatcher now owns this.
+sudo rm -f /etc/netplan/90-auto-modem-dhcp.yaml
+sudo rm -f /etc/netplan/99-modem-disable.yaml
 
 # Ensure /etc/3proxy is writable
 log_info "  Ensuring /etc/3proxy directory permissions..."
@@ -128,10 +134,12 @@ chmod 755 /var/lib/partner-node 2>/dev/null || true
 CRON
 sudo chmod +x /etc/cron.hourly/partner-node-fs-health
 
-# Wait a moment for changes to take effect
 sleep 2
 
-log_info "✅ USB modem auto-DHCP setup complete"
-log_info "   USB modems will now automatically get IP when connected/reconnected"
+log_info "вњ… USB modem routing policy setup complete"
+log_info "   Huawei modems will stay reachable but not become the host default internet route"
 log_info "   Helper script: $SETUP_SCRIPT"
+if [[ -f "$NM_DISPATCHER" ]]; then
+  log_info "   NetworkManager dispatcher: $NM_DISPATCHER"
+fi
 log_info "   Filesystem health job: /etc/cron.hourly/partner-node-fs-health"
