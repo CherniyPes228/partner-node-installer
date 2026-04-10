@@ -28,6 +28,7 @@ source "$LIB_DIR/common.sh"
 
 PURGE_PACKAGES="false"
 KEEP_PROXY_CONFIG="false"
+APPLY_NETPLAN="false"
 SERVICE_NAME="${SERVICE_NAME:-partner-node}"
 UI_SERVICE_NAME="${UI_SERVICE_NAME:-partner-node-ui}"
 
@@ -40,6 +41,8 @@ Usage: $0 [OPTIONS]
 Optional:
   --purge-packages      Also remove installed packages (3proxy, wireguard, modemmanager)
   --keep-proxy-config   Keep /etc/3proxy/3proxy.conf
+  --apply-netplan       Apply netplan after uninstall (disabled by default to keep connectivity)
+  --skip-netplan-apply  Explicitly skip netplan apply after uninstall
   --help, -h            Show this help message
 
 Examples:
@@ -54,6 +57,8 @@ parse_args() {
     case "$1" in
       --purge-packages) PURGE_PACKAGES="true"; shift ;;
       --keep-proxy-config) KEEP_PROXY_CONFIG="true"; shift ;;
+      --apply-netplan) APPLY_NETPLAN="true"; shift ;;
+      --skip-netplan-apply) APPLY_NETPLAN="false"; shift ;;
       --help|-h) usage; exit 0 ;;
       *)
         log_err "Unknown argument: $1"
@@ -84,6 +89,19 @@ remove_if_exists() {
     rm -rf "$path"
     log_info "Removed $path"
   fi
+}
+
+remove_glob_matches() {
+  local pattern="$1"
+  local matches=()
+  shopt -s nullglob
+  matches=( $pattern )
+  shopt -u nullglob
+  local path
+  for path in "${matches[@]}"; do
+    rm -rf "$path"
+    log_info "Removed $path"
+  done
 }
 
 remove_cron_entry() {
@@ -130,6 +148,7 @@ main() {
   stop_and_disable_service "$UI_SERVICE_NAME"
   stop_and_disable_service "partner-node-self-update"
   stop_and_disable_service "disable-modem"
+  stop_and_disable_service "3proxy"
 
   pkill -9 -f "/usr/local/bin/node-agent -config /etc/partner-node/config.yaml" 2>/dev/null || true
   pkill -9 -f "/usr/local/bin/node-agent" 2>/dev/null || true
@@ -142,6 +161,8 @@ main() {
   remove_if_exists "/etc/systemd/system/partner-node-self-update.service"
   remove_if_exists "/etc/systemd/system/partner-node-self-update.timer"
   remove_if_exists "/etc/systemd/system/disable-modem.service"
+  remove_if_exists "/etc/systemd/system/3proxy.service.d/override.conf"
+  remove_if_exists "/etc/systemd/system/3proxy.service.d"
 
   systemctl daemon-reload || true
 
@@ -166,6 +187,16 @@ main() {
   remove_if_exists "/etc/cron.hourly/partner-node-fs-health"
   remove_if_exists "/var/log/modem-routing.log"
   remove_if_exists "/etc/sudoers.d/partner-node-support"
+  remove_if_exists "/var/log/3proxy"
+  remove_if_exists "/tmp/node-agent-download"
+  remove_if_exists "/tmp/3proxy.deb"
+  remove_if_exists "/tmp/e3372_last_flash_port"
+  remove_if_exists "/tmp/e3372_fastboot_product.txt"
+  remove_glob_matches "/tmp/e3372-live*.log"
+  remove_glob_matches "/tmp/e3372-live-after-recovery.log*"
+  remove_glob_matches "/tmp/e3372-*.log"
+  remove_glob_matches "/tmp/partner-node-uninstall-lib-*"
+  remove_glob_matches "/tmp/partner-node-installer-lib-*"
 
   for home_dir in /home/*; do
     [[ -d "$home_dir/.ssh" ]] || continue
@@ -175,7 +206,7 @@ main() {
   done
 
   if [[ "$KEEP_PROXY_CONFIG" != "true" ]]; then
-    remove_if_exists "/etc/3proxy/3proxy.conf"
+    remove_if_exists "/etc/3proxy"
   fi
 
   if [[ "$PURGE_PACKAGES" == "true" ]]; then
@@ -185,8 +216,10 @@ main() {
     log_info "Keeping system packages (3proxy, wireguard, modemmanager)"
   fi
 
-  if command_exists netplan; then
+  if [[ "$APPLY_NETPLAN" == "true" ]] && command_exists netplan; then
     netplan apply 2>/dev/null || true
+  else
+    log_info "Skipping netplan apply during uninstall to avoid disrupting active connectivity"
   fi
 
   log_info ""

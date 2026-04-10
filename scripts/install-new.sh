@@ -88,6 +88,19 @@ Examples:
 EOF
 }
 
+run_preclean_uninstall() {
+  local uninstall_script="${LIB_DIR}/uninstall.sh"
+  log_info "Running pre-install cleanup to ensure a clean host state..."
+  curl -fsSL "https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/uninstall.sh" -o "${uninstall_script}" 2>/dev/null || {
+    log_err "Failed to download uninstall.sh for pre-clean"
+    exit 1
+  }
+  bash "${uninstall_script}" --skip-netplan-apply || {
+    log_err "Pre-install cleanup failed"
+    exit 1
+  }
+}
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -236,6 +249,7 @@ main() {
     exit 1
   fi
 
+  run_preclean_uninstall
   sync_system_time
 
   # Auto-detect country from IP if not provided
