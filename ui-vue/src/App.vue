@@ -126,6 +126,7 @@ const activeNodeId = computed(() => selectedNode.value !== "all" ? selectedNode.
 const filteredModems = computed(() => selectedNode.value === "all" ? modems.value : modems.value.filter((item) => item.node_id === selectedNode.value))
 const lastResults = computed(() => commandHistory.value.slice(0, 12))
 const activeFlashModem = computed(() => modems.value.find((item) => ["queued", "running", "verify"].includes(String(item.flash_status || "").toLowerCase())))
+const activeFlashNodeId = computed(() => String(activeFlashModem.value?.node_id || "").trim())
 const TARGET_MAIN_VERSION = "22.200.15.00.00"
 const TARGET_WEBUI_VERSION = "17.100.13.113.03"
 
@@ -175,6 +176,7 @@ function isKnownNodeModem(modem) {
 function canFlashLiveModem(modem) {
   if (!modem) return false
   if (["queued", "running", "verify"].includes(String(modem.flash_status || "").toLowerCase())) return false
+  if (activeFlashNodeId.value && modem.node_id === activeFlashNodeId.value) return false
   if (!modem.imei && modem.usb_vendor_id === "12d1") return true
   if (isKnownNodeModem(modem)) return false
   return modem.state === "detected" || modem.provision_status === "requires_flash"
@@ -201,21 +203,28 @@ function flashProgressPercent(stage, status) {
     queued: 5,
     precheck: 8,
     stop_services: 10,
-    detect_modem: 14,
-    godload: 22,
-    wait_serial: 30,
-    flash_full: 78,
-    flash_main: 68,
-    flash_webui: 88,
-    flash_reboot: 92,
-    rebooting: 92,
-    dispatched: 50,
-    post_flash: 94,
-    recover_network: 95,
-    verify: 98,
+    detect_modem: 12,
+    godload: 15,
+    wait_serial: 20,
+    flash_full: 70,
+    flash_main: 35,
+    flash_webui: 70,
+    flash_reboot: 82,
+    rebooting: 85,
+    dispatched: 35,
+    post_flash: 90,
+    recover_network: 90,
+    verify: 90,
     completed: 100,
   }
   return byStage[normalizedStage] || (normalizedStatus === "running" ? 18 : 0)
+}
+
+function flashProgressIndeterminate(stage, status) {
+  const normalizedStatus = String(status || "").toLowerCase()
+  const normalizedStage = String(stage || "").toLowerCase()
+  if (normalizedStatus === "done" || normalizedStatus === "failed") return false
+  return ["rebooting", "flash_reboot", "post_flash", "recover_network", "verify"].includes(normalizedStage)
 }
 
 function flashStageLabel(stage, status) {
@@ -236,9 +245,9 @@ function flashStageLabel(stage, status) {
     flash_reboot: "Rebooting modem",
     rebooting: "Rebooting modem",
     dispatched: "Modem sent to flash",
-    post_flash: "Post-flash recovery",
-    recover_network: "Restoring modem network",
-    verify: "Verifying final versions",
+    post_flash: "Waiting for modem WebUI",
+    recover_network: "Waiting for modem network",
+    verify: "Waiting for modem WebUI",
     completed: "Completed",
     verified: "Verified",
   }
@@ -293,8 +302,8 @@ function syncFlashOverlayFromOverview() {
           ...flashOverlay.value,
           open: true,
           status: "running",
-          stage: "dispatched",
-          message: "Modem sent to flash. Waiting for the modem to come back and for WebUI to answer before marking the process complete.",
+          stage: "verify",
+          message: "Firmware write finished. Waiting for the modem to reboot, bring the network back, and answer via WebUI before marking the process complete.",
         }
         return
       }
@@ -599,6 +608,10 @@ async function verifySim(modem) {
 }
 
 async function flashRegistryModem(item) {
+  if (activeFlashNodeId.value && String(item?.node_id || "").trim() === activeFlashNodeId.value) {
+    registryMessage.value = `another modem is already flashing on node ${activeFlashNodeId.value}`
+    return
+  }
   registrySaving.value = (item.node_id && item.imei) ? `${item.node_id}:${item.imei}` : (item.imei || `${item.last_seen_node_id}:${item.last_seen_modem_id}`)
   registryMessage.value = ""
   try {
@@ -987,13 +1000,18 @@ onBeforeUnmount(() => { closeRealtime(); clearRefreshTimer(); if (fallbackTimer)
           </div>
           <div class="h-3 overflow-hidden rounded-full bg-muted">
             <div
+              v-if="flashProgressIndeterminate(flashOverlay.stage, flashOverlay.status)"
+              class="h-full w-full rounded-full bg-primary/80 animate-pulse"
+            />
+            <div
+              v-else
               class="h-full rounded-full transition-all duration-500"
               :class="String(flashOverlay.status || '').toLowerCase() === 'failed' ? 'bg-destructive' : 'bg-primary'"
               :style="{ width: `${flashProgressPercent(flashOverlay.stage, flashOverlay.status)}%` }"
             />
           </div>
           <div class="flex items-center justify-between text-xs text-muted-foreground">
-            <span>{{ flashProgressPercent(flashOverlay.stage, flashOverlay.status) }}%</span>
+            <span>{{ flashProgressIndeterminate(flashOverlay.stage, flashOverlay.status) ? "waiting" : `${flashProgressPercent(flashOverlay.stage, flashOverlay.status)}%` }}</span>
             <span>{{ flashOverlay.stage || "queued" }}</span>
           </div>
         </div>
