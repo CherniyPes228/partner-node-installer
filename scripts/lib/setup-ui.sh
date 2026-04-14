@@ -230,6 +230,7 @@ def local_hilink_base_candidates():
 
 
 def detect_local_huawei_hilink_placeholder():
+    recognized_products = ("14dc", "14db", "1505", "1506")
     try:
         lsusb = subprocess.run(
             ["lsusb"],
@@ -238,7 +239,7 @@ def detect_local_huawei_hilink_placeholder():
             check=False,
         )
         usb_text = (lsusb.stdout or "").lower()
-        if "12d1:14dc" not in usb_text:
+        if not any(f"12d1:{product}" in usb_text for product in recognized_products):
             return None
     except Exception:
         return None
@@ -254,7 +255,7 @@ def detect_local_huawei_hilink_placeholder():
         iface_ip = ""
         for line in (ip_out.stdout or "").splitlines():
             line = line.strip()
-            if " enx" not in f" {line}" and not line.startswith(tuple(str(i) for i in range(10))):
+            if not line or not line[0].isdigit():
                 continue
             parts = line.split()
             if len(parts) < 4:
@@ -262,7 +263,7 @@ def detect_local_huawei_hilink_placeholder():
             name = parts[1]
             cidr = parts[3]
             ip = cidr.split("/", 1)[0].strip()
-            if not name.startswith("enx"):
+            if not name.startswith(("enx", "enp", "usb")):
                 continue
             if ip.startswith("192.168.8.") or ip.startswith("192.168.1."):
                 iface_name = name
@@ -279,7 +280,7 @@ def detect_local_huawei_hilink_placeholder():
         "ordinal": 0,
         "modem_number": 0,
         "usb_vendor_id": "12d1",
-        "usb_product_id": "14dc",
+        "usb_product_id": "",
         "usb_mode": "hilink",
         "state": "detected",
         "wan_ip": "",
