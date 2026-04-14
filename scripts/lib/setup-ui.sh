@@ -33,11 +33,12 @@ import mimetypes
 import os
 import re
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAIN_SERVER = os.environ.get("MAIN_SERVER", "").rstrip("/")
 PARTNER_KEY = os.environ.get("PARTNER_KEY", "")
@@ -54,6 +55,9 @@ NODE_CREDENTIALS_PATH = os.environ.get("PARTNER_NODE_CREDENTIALS", "/var/lib/par
 TARGET_MAIN_VERSION = "22.200.15.00.00"
 TARGET_WEBUI_VERSION = "17.100.13.113.03"
 TARGET_WEBUI_LABEL = "17.100.13.01.03"
+MAIN_SERVER_TIMEOUT = float(os.environ.get("PARTNER_MAIN_SERVER_TIMEOUT", "5"))
+HILINK_PROBE_TIMEOUT = float(os.environ.get("PARTNER_HILINK_PROBE_TIMEOUT", "1.5"))
+OVERVIEW_CACHE_TTL = float(os.environ.get("PARTNER_OVERVIEW_CACHE_TTL", "3"))
 
 ALLOWED = {
     "self_check",
@@ -65,14 +69,28 @@ ALLOWED = {
     "flash_modem",
 }
 
+OVERVIEW_CACHE_LOCK = threading.Lock()
+OVERVIEW_CACHE = {
+    "data": {
+        "partner_key": PARTNER_KEY,
+        "main_server": MAIN_SERVER,
+        "nodes": [],
+        "modems": [],
+        "modem_registry": [],
+    },
+    "updated_at": 0.0,
+    "refreshing": False,
+    "error": "",
+}
 
-def json_request(url, method="GET", payload=None):
+
+def json_request(url, method="GET", payload=None, timeout=MAIN_SERVER_TIMEOUT):
     body = None
     headers = {"Content-Type": "application/json"}
     if payload is not None:
         body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, method=method, data=body, headers=headers)
-    with urllib.request.urlopen(req, timeout=25) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -336,7 +354,7 @@ def read_hilink_device_info(base_url):
         return None
     try:
         ses = subprocess.run(
-            ["curl", "-fsS", "--max-time", "5", f"{base_url}/api/webserver/SesTokInfo"],
+            ["curl", "-fsS", "--max-time", str(HILINK_PROBE_TIMEOUT), f"{base_url}/api/webserver/SesTokInfo"],
             capture_output=True,
             text=True,
             check=False,
@@ -350,7 +368,7 @@ def read_hilink_device_info(base_url):
             return None
         info = subprocess.run(
             [
-                "curl", "-fsS", "--max-time", "5",
+                "curl", "-fsS", "--max-time", str(HILINK_PROBE_TIMEOUT),
                 "-H", f"Cookie: {ses_match.group(1).strip()}",
                 "-H", f"__RequestVerificationToken: {tok_match.group(1).strip()}",
                 f"{base_url}/api/device/information",
@@ -706,9 +724,28 @@ def write_flash_settings(auto_enabled):
 
 
 def fetch_overview():
+    now = time.time()
+    with OVERVIEW_CACHE_LOCK:
+        cached = dict(OVERVIEW_CACHE["data"]) if isinstance(OVERVIEW_CACHE["data"], dict) else {
+            "partner_key": PARTNER_KEY,
+            "main_server": MAIN_SERVER,
+            "nodes": [],
+            "modems": [],
+            "modem_registry": [],
+        }
+        updated_at = float(OVERVIEW_CACHE.get("updated_at") or 0.0)
+        refreshing = bool(OVERVIEW_CACHE.get("refreshing"))
+    if now - updated_at <= OVERVIEW_CACHE_TTL and cached:
+        return cached
+    if not refreshing:
+        schedule_overview_refresh()
+    return cached
+
+
+def rebuild_overview_snapshot():
     qs = urllib.parse.urlencode({"partner_key": PARTNER_KEY})
     try:
-        data = json_request(f"{MAIN_SERVER}/api/partner/overview?{qs}")
+        data = json_request(f"{MAIN_SERVER}/api/partner/overview?{qs}", timeout=MAIN_SERVER_TIMEOUT)
     except Exception:
         data = {
             "partner_key": PARTNER_KEY,
@@ -724,6 +761,31 @@ def fetch_overview():
         inject_local_runtime_state(data)
         reconcile_aliases(data)
     return data
+
+
+def refresh_overview_cache():
+    try:
+        data = rebuild_overview_snapshot()
+        error = ""
+    except Exception as err:
+        with OVERVIEW_CACHE_LOCK:
+            OVERVIEW_CACHE["refreshing"] = False
+            OVERVIEW_CACHE["error"] = str(err)
+        return
+
+    with OVERVIEW_CACHE_LOCK:
+        OVERVIEW_CACHE["data"] = data
+        OVERVIEW_CACHE["updated_at"] = time.time()
+        OVERVIEW_CACHE["refreshing"] = False
+        OVERVIEW_CACHE["error"] = error
+
+
+def schedule_overview_refresh():
+    with OVERVIEW_CACHE_LOCK:
+        if OVERVIEW_CACHE["refreshing"]:
+            return
+        OVERVIEW_CACHE["refreshing"] = True
+    threading.Thread(target=refresh_overview_cache, daemon=True).start()
 
 
 def resolve_alias_target(ordinal):
@@ -828,7 +890,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except BrokenPipeError:
+            return
 
     def _send_text(self, code, text):
         body = text.encode("utf-8")
@@ -836,7 +901,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except BrokenPipeError:
+            return
 
     def _serve_file(self, file_path):
         if not os.path.isfile(file_path):
@@ -851,7 +919,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except BrokenPipeError:
+            return
 
     def _proxy_alias_request(self, ordinal):
         modem, upstream_base = resolve_alias_target(ordinal)
@@ -1079,7 +1150,8 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     ensure_alias_redirect()
-    server = HTTPServer((LISTEN_ADDR, LISTEN_PORT), Handler)
+    schedule_overview_refresh()
+    server = ThreadingHTTPServer((LISTEN_ADDR, LISTEN_PORT), Handler)
     server.serve_forever()
 PY
 
