@@ -53,6 +53,14 @@ need_file() {
   [[ -f "$1" ]] || die "missing file: $1"
 }
 
+adb_safe() {
+  timeout 4 adb "$@" >/dev/null 2>&1
+}
+
+ensure_adb_server() {
+  timeout 4 adb start-server >/dev/null 2>&1 || true
+}
+
 wait_dev_any() {
   local timeout="${1:-25}"
   local i=0
@@ -204,6 +212,7 @@ godload_via_adb() {
 
     sleep 3
   done
+  log "ADB/GODLOAD did not succeed after repeated attempts"
   return 1
 }
 
@@ -528,10 +537,3 @@ main() {
 }
 
 main "$@"
-adb_safe() {
-  timeout 4 adb "$@" >/dev/null 2>&1
-}
-
-ensure_adb_server() {
-  timeout 4 adb start-server >/dev/null 2>&1 || true
-}
