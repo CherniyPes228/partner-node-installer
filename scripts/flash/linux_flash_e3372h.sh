@@ -22,6 +22,7 @@ WEBUI_FW="${WEBUI_FW:-$IMAGES_DIR/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bi
 USBLOAD="$TOOLS_DIR/balong-usbload"
 USBLSAFE="$TOOLS_DIR/usblsafe-3372h.bin"
 PTABLE="$TOOLS_DIR/ptable-hilink.bin"
+LOCK_FILE="/var/lock/partner-node-flash-e3372h.lock"
 
 log() {
   printf '\n[%s] %s\n' "$(date +%H:%M:%S)" "$*"
@@ -172,12 +173,13 @@ wait_adb_on_hilink() {
   local timeout="${1:-40}"
   local i=0
 
+  ensure_adb_server
   while (( i < timeout )); do
     bring_usbnet_up
-    adb connect 192.168.8.1:5555 >/dev/null 2>&1 || true
-    adb connect 192.168.1.1:5555 >/dev/null 2>&1 || true
+    adb_safe connect 192.168.8.1:5555 || true
+    adb_safe connect 192.168.1.1:5555 || true
 
-    if adb devices | grep -qE '192\.168\.(8|1)\.1:5555'; then
+    if timeout 4 adb devices 2>/dev/null | grep -qE '192\.168\.(8|1)\.1:5555'; then
       return 0
     fi
 
@@ -195,9 +197,9 @@ godload_via_adb() {
     bring_usbnet_up
 
     if wait_adb_on_hilink 20; then
-      adb shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
-      adb -s 192.168.8.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
-      adb -s 192.168.1.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+      timeout 5 adb shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+      timeout 5 adb -s 192.168.8.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+      timeout 5 adb -s 192.168.1.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
     fi
 
     sleep 3
@@ -391,9 +393,9 @@ adb_at_reset() {
   bring_usbnet_up
   wait_adb_on_hilink 20 || return 1
 
-  adb shell 'echo -e "AT^RESET\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
-  adb -s 192.168.8.1:5555 shell 'echo -e "AT^RESET\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
-  adb -s 192.168.1.1:5555 shell 'echo -e "AT^RESET\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+  timeout 5 adb shell 'echo -e "AT^RESET\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+  timeout 5 adb -s 192.168.8.1:5555 shell 'echo -e "AT^RESET\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+  timeout 5 adb -s 192.168.1.1:5555 shell 'echo -e "AT^RESET\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
 
   return 1
 }
@@ -427,6 +429,7 @@ post_webui_recover() {
 main() {
   need_cmd lsusb
   need_cmd adb
+  need_cmd flock
   need_cmd usb_modeswitch
   need_cmd sudo
 
@@ -436,6 +439,10 @@ main() {
   need_file "$USBLOAD"
   need_file "$USBLSAFE"
   need_file "$PTABLE"
+
+  mkdir -p "$(dirname "$LOCK_FILE")"
+  exec 9>"$LOCK_FILE"
+  flock -n 9 || die "another modem flash worker is already running on this node"
 
   log "Flash worker configuration:"
   log "  modem_id=${MODEM_ID:-<none>} ordinal=${ORDINAL:-<none>}"
@@ -521,3 +528,10 @@ main() {
 }
 
 main "$@"
+adb_safe() {
+  timeout 4 adb "$@" >/dev/null 2>&1
+}
+
+ensure_adb_server() {
+  timeout 4 adb start-server >/dev/null 2>&1 || true
+}
