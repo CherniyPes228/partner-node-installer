@@ -114,6 +114,43 @@ remove_cron_entry() {
   fi
 }
 
+read_config_scalar() {
+  local file="$1"
+  local key="$2"
+  [[ -f "$file" ]] || return 0
+  sed -n "s/^\\s*${key}:\\s*\"\\{0,1\\}\\([^\"#]*\\)\"\\{0,1\\}\\s*$/\\1/p" "$file" | head -n 1
+}
+
+read_node_id_from_credentials() {
+  local file="$1"
+  [[ -f "$file" ]] || return 0
+  sed -n 's/^node_id=//p' "$file" | head -n 1
+}
+
+best_effort_reset_node_registry() {
+  local config_file="/etc/partner-node/config.yaml"
+  local credentials_file="/var/lib/partner-node/node_credentials"
+  local partner_key=""
+  local main_server=""
+  local node_id=""
+
+  partner_key="$(read_config_scalar "$config_file" "partner_key" | tr -d '\r')"
+  main_server="$(read_config_scalar "$config_file" "main_server" | tr -d '\r')"
+  node_id="$(read_node_id_from_credentials "$credentials_file" | tr -d '\r')"
+
+  if [[ -z "$partner_key" || -z "$main_server" || -z "$node_id" ]]; then
+    log_info "Skipping server-side node modem registry reset (missing partner_key, main_server or node_id)"
+    return 0
+  fi
+
+  log_info "Requesting server-side modem registry reset for node ${node_id}"
+  curl -fsS -X POST \
+    -H "Content-Type: application/json" \
+    -d "{\"partner_key\":\"${partner_key}\",\"node_id\":\"${node_id}\"}" \
+    "${main_server%/}/api/partner/reset-node" >/dev/null 2>&1 || \
+    log_warn "Server-side node modem registry reset failed; continuing with local uninstall"
+}
+
 purge_packages() {
   local distro
   distro=$(get_distro)
@@ -143,6 +180,8 @@ main() {
   log_info "╔════════════════════════════════════════════════════════════╗"
   log_info "║                 Partner Node Uninstall                   ║"
   log_info "╚════════════════════════════════════════════════════════════╝"
+
+  best_effort_reset_node_registry
 
   stop_and_disable_service "$SERVICE_NAME"
   stop_and_disable_service "$UI_SERVICE_NAME"
