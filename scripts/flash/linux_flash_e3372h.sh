@@ -173,6 +173,7 @@ godload_via_adb() {
 
     sleep 3
   done
+  log "ADB/GODLOAD failed after all attempts"
   return 1
 }
 
@@ -202,6 +203,7 @@ enter_flash_mode() {
 
   if lsusb | grep -q '12d1:14dc'; then
     godload_via_adb && return 0
+    die "failed to enter flash mode via ADB/GODLOAD; stock HiLink may require debug mode or manual recovery"
   fi
 
   if ls /dev/ttyUSB* >/dev/null 2>&1; then
