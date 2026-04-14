@@ -102,6 +102,7 @@ const nodes = computed(() => Array.isArray(overview.value?.nodes) ? overview.val
 const modems = computed(() => Array.isArray(overview.value?.modems) ? overview.value.modems : [])
 const commandHistory = computed(() => Array.isArray(overview.value?.last_results) ? overview.value.last_results : [])
 const partnerBalance = computed(() => overview.value?.partner_balance || {})
+const flashJob = computed(() => (overview.value && typeof overview.value.flash_job === "object" && overview.value.flash_job) ? overview.value.flash_job : null)
 const billingByKey = computed(() => {
   const map = {}
   for (const item of modemBilling.value) map[`${item.node_id}:${item.modem_id}`] = item
@@ -126,9 +127,26 @@ const activeNodeId = computed(() => selectedNode.value !== "all" ? selectedNode.
 const filteredModems = computed(() => selectedNode.value === "all" ? modems.value : modems.value.filter((item) => item.node_id === selectedNode.value))
 const lastResults = computed(() => commandHistory.value.slice(0, 12))
 const activeFlashModem = computed(() => modems.value.find((item) => ["queued", "running", "verify"].includes(String(item.flash_status || "").toLowerCase())))
-const activeFlashNodeId = computed(() => String(activeFlashModem.value?.node_id || "").trim())
+const activeFlashNodeId = computed(() => String(flashJob.value?.node_id || activeFlashModem.value?.node_id || "").trim())
 const TARGET_MAIN_VERSION = "22.200.15.00.00"
 const TARGET_WEBUI_VERSION = "17.100.13.113.03"
+
+function isActiveFlashJob(job) {
+  const status = String(job?.status || "").trim().toLowerCase()
+  return ["queued", "entering_flash", "waiting_serial", "flashing_main", "flashing_webui", "rebooting", "recovering_network", "verifying", "running"].includes(status)
+}
+
+function isTerminalFlashJob(job) {
+  const status = String(job?.status || "").trim().toLowerCase()
+  return ["completed", "done", "failed"].includes(status)
+}
+
+function flashJobTargetModem(job) {
+  if (!job) return null
+  const jobImei = String(job.imei || "").trim()
+  const jobModemId = String(job.modem_id || "").trim()
+  return modems.value.find((item) => (jobImei && String(item.imei || "").trim() === jobImei) || (jobModemId && String(item.id || "").trim() === jobModemId)) || null
+}
 
 function bytesLabel(value) {
   const size = Number(value || 0)
@@ -177,9 +195,11 @@ function canFlashLiveModem(modem) {
   if (!modem) return false
   if (["queued", "running", "verify"].includes(String(modem.flash_status || "").toLowerCase())) return false
   if (activeFlashNodeId.value && modem.node_id === activeFlashNodeId.value) return false
-  if (!modem.imei && modem.usb_vendor_id === "12d1") return true
-  if (isKnownNodeModem(modem)) return false
-  return modem.state === "detected" || modem.provision_status === "requires_flash"
+  if (modem.local_flashed === true) return false
+  if (!String(modem.imei || "").trim()) return false
+  if (modem.known_to_node === true && String(modem.provision_status || "").trim().toLowerCase() === "ready") return false
+  if (isKnownNodeModem(modem) && String(modem.provision_status || "").trim().toLowerCase() === "ready") return false
+  return ["detected", "ready"].includes(String(modem.state || "").trim().toLowerCase()) || modem.provision_status === "requires_flash"
 }
 
 function relativeTime(value) {
@@ -201,20 +221,22 @@ function flashProgressPercent(stage, status) {
   if (normalizedStatus === "failed") return 100
   const byStage = {
     queued: 5,
-    precheck: 8,
-    stop_services: 10,
-    detect_modem: 12,
+    starting: 10,
+    entering_flash: 15,
+    detect_modem: 15,
     godload: 15,
+    waiting_serial: 20,
     wait_serial: 20,
-    flash_full: 70,
+    flashing_main: 35,
     flash_main: 35,
+    flashing_webui: 70,
     flash_webui: 70,
-    flash_reboot: 82,
     rebooting: 85,
-    dispatched: 35,
-    post_flash: 90,
+    flash_reboot: 85,
+    recovering_network: 90,
     recover_network: 90,
-    verify: 90,
+    verifying: 92,
+    verify: 92,
     completed: 100,
   }
   return byStage[normalizedStage] || (normalizedStatus === "running" ? 18 : 0)
@@ -224,7 +246,7 @@ function flashProgressIndeterminate(stage, status) {
   const normalizedStatus = String(status || "").toLowerCase()
   const normalizedStage = String(stage || "").toLowerCase()
   if (normalizedStatus === "done" || normalizedStatus === "failed") return false
-  return ["rebooting", "flash_reboot", "post_flash", "recover_network", "verify"].includes(normalizedStage)
+  return ["rebooting", "flash_reboot", "post_flash", "recover_network", "recovering_network", "verify", "verifying"].includes(normalizedStage)
 }
 
 function flashStageLabel(stage, status) {
@@ -234,20 +256,23 @@ function flashStageLabel(stage, status) {
   if (normalizedStatus === "failed") return "Flashing failed"
   const labels = {
     queued: "Queued",
-    precheck: "Precheck",
-    stop_services: "Preparing host services",
+    starting: "Preparing flash worker",
     detect_modem: "Detecting modem",
+    entering_flash: "Entering firmware mode",
     godload: "Entering firmware mode",
+    waiting_serial: "Waiting for serial ports",
     wait_serial: "Waiting for serial ports",
-    flash_full: "Writing firmware package",
     flash_main: "Writing main firmware",
+    flashing_main: "Writing main firmware",
     flash_webui: "Writing WebUI",
+    flashing_webui: "Writing WebUI",
     flash_reboot: "Rebooting modem",
     rebooting: "Rebooting modem",
-    dispatched: "Modem sent to flash",
     post_flash: "Waiting for modem WebUI",
-    recover_network: "Waiting for modem network",
+    recover_network: "Recovering modem network",
+    recovering_network: "Recovering modem network",
     verify: "Waiting for modem WebUI",
+    verifying: "Waiting for modem WebUI",
     completed: "Completed",
     verified: "Verified",
   }
@@ -281,6 +306,25 @@ function canConfirmFlashCompletion(modem) {
 }
 
 function syncFlashOverlayFromOverview() {
+  if (flashJob.value) {
+    const target = flashJobTargetModem(flashJob.value)
+    const number = target ? localModemNumber(target) : (Number(flashJob.value.ordinal || 0) || "?")
+    const idLabel = target?.id || flashJob.value.modem_id || "modem"
+    const nodeLabel = target?.node_id || flashJob.value.node_id || ""
+    const label = `#${number} • ${idLabel}${nodeLabel ? ` • ${nodeLabel}` : ""}`
+    if (isActiveFlashJob(flashJob.value) || isTerminalFlashJob(flashJob.value)) {
+      flashOverlay.value = {
+        open: true,
+        status: flashJob.value.status || "running",
+        stage: flashJob.value.stage || flashJob.value.status || "running",
+        message: flashJob.value.message || "Safe flash is running. Do not unplug or reconnect the modem until the process finishes.",
+        label,
+        key: flashOverlayKeyForModem(target || { node_id: nodeLabel, id: idLabel, imei: flashJob.value.imei || "" }),
+        startedAt: flashOverlay.value.startedAt || Date.now(),
+      }
+      return
+    }
+  }
   const current = activeFlashModem.value
   if (current) {
     const label = `#${localModemNumber(current)} • ${current.id}${current.node_id ? ` • ${current.node_id}` : ""}`
@@ -366,14 +410,14 @@ function buildPartnerWsUrl() {
 
 function connectRealtime() {
   const nextUrl = buildPartnerWsUrl()
-  if (!nextUrl) { realtimeState.value = "offline"; realtimeNote.value = "Main server for realtime is not known yet."; return }
+  if (!nextUrl) { realtimeState.value = "disconnected"; realtimeNote.value = "Main server for realtime is not known yet."; return }
   if (ws && ws.readyState === WebSocket.OPEN && wsUrl === nextUrl) return
   closeRealtime(); wsUrl = nextUrl; realtimeState.value = "connecting"; realtimeNote.value = "Connecting websocket to the main server..."
   ws = new WebSocket(nextUrl)
   ws.onopen = () => { realtimeState.value = "active"; realtimeNote.value = "Live channel is active, the screen updates from events."; pushEvent("realtime.connected", { partner_key: overview.value?.partner_key || "" }) }
   ws.onmessage = (event) => { try { const data = JSON.parse(event.data); pushEvent(data.type || "event", data.payload || {}) } catch { pushEvent("event.raw", { text: String(event.data || "") }) } scheduleRefresh(120) }
   ws.onerror = () => { realtimeState.value = "warning"; realtimeNote.value = "Realtime channel reported an error, waiting to reconnect." }
-  ws.onclose = () => { ws = null; realtimeState.value = "offline"; realtimeNote.value = "Realtime channel is offline, trying to recover."; clearReconnect(); reconnectTimer = window.setTimeout(() => connectRealtime(), 2500) }
+  ws.onclose = () => { ws = null; realtimeState.value = "fallback"; realtimeNote.value = "Realtime channel is reconnecting; local polling stays active."; clearReconnect(); reconnectTimer = window.setTimeout(() => connectRealtime(), 2500) }
 }
 
 async function loadOverview(showLoader = true) {
@@ -393,7 +437,7 @@ async function loadOverview(showLoader = true) {
   } catch (error) {
     refreshError.value = error instanceof Error ? error.message : "refresh failed"
     if (realtimeState.value !== "active") {
-      realtimeState.value = "warning"
+      realtimeState.value = "fallback"
       realtimeNote.value = "Local overview request failed, retrying with periodic polling."
     }
   } finally { loading.value = false }

@@ -52,6 +52,7 @@ MODEM_ALIAS_PREFIX = os.environ.get("MODEM_ALIAS_PREFIX", "172.31")
 MODEM_ALIAS_PORT = int(os.environ.get("MODEM_ALIAS_PORT", "80"))
 CONFIG_PATH = os.environ.get("PARTNER_NODE_CONFIG", "/etc/partner-node/config.yaml")
 LOCAL_MODEM_REGISTRY_PATH = os.environ.get("PARTNER_NODE_MODEM_REGISTRY", "/var/lib/partner-node/modem_ordinal_registry.json")
+LOCAL_FLASH_JOB_PATH = os.environ.get("PARTNER_NODE_FLASH_JOB", "/var/lib/partner-node/flash_job_state.json")
 NODE_CREDENTIALS_PATH = os.environ.get("PARTNER_NODE_CREDENTIALS", "/var/lib/partner-node/node_credentials")
 TARGET_MAIN_VERSION = "22.200.15.00.00"
 TARGET_WEBUI_VERSION = "17.100.13.113.03"
@@ -184,6 +185,20 @@ def load_local_modem_registry():
         return numbers if isinstance(numbers, dict) else {}, flashed if isinstance(flashed, dict) else {}
     except Exception:
         return {}, {}
+
+
+def load_local_flash_job():
+    try:
+        with open(LOCAL_FLASH_JOB_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            return None
+        job = data.get("current")
+        if not isinstance(job, dict):
+            return None
+        return job
+    except Exception:
+        return None
 
 
 def read_local_node_id():
@@ -327,25 +342,27 @@ def detect_local_huawei_hilink_placeholder():
     }
 
 
-def detect_local_live_modem(node_id, registry_by_node_imei):
+def detect_local_live_modem(node_id, registry_by_node_imei, by_stable_key, flashed):
     for base_url in local_hilink_base_candidates():
         info = read_hilink_device_info(base_url)
         if not info:
             continue
 
         imei = normalize_digits(info.get("imei"))
+        stable_key = f"imei:{imei}" if imei else ""
         registry_item = registry_by_node_imei.get(f"{node_id}:{imei}") if node_id and imei else None
-        provision_status = "requires_flash"
-        provision_notes = "new modem for this node"
-        if registry_item:
-            provision_status = str(registry_item.get("provision_status") or "").strip() or "new"
-            if provision_status == "ready":
-                provision_notes = "known modem for this node"
+        local_number = int(by_stable_key.get(stable_key) or 0) if stable_key else 0
+        local_flashed = bool(flashed.get(stable_key)) if stable_key else False
+        provision_status = "ready" if local_flashed else "requires_flash"
+        provision_notes = "known modem for this node" if local_flashed or local_number > 0 else "new modem for this node"
 
         modem = {
             "id": "hilink0",
             "ordinal": 0,
-            "modem_number": int(registry_item.get("modem_number") or 0) if registry_item else 0,
+            "modem_number": int(registry_item.get("modem_number") or 0) if registry_item else local_number,
+            "local_modem_number": local_number,
+            "known_to_node": bool(local_number > 0),
+            "local_flashed": local_flashed,
             "node_id": node_id,
             "node_status": current_local_node_status(),
             "usb_vendor_id": "12d1",
@@ -370,7 +387,7 @@ def detect_local_live_modem(node_id, registry_by_node_imei):
             "last_seen_modem_id": "hilink0",
         }
         modem.update(info)
-        if modem_has_target(modem.get("software_version"), modem.get("webui_version")) and provision_status == "ready":
+        if local_flashed and modem_has_target(modem.get("software_version"), modem.get("webui_version")):
             number = int(modem.get("modem_number") or modem.get("ordinal") or 0)
             modem["flash_status"] = "done"
             modem["flash_stage"] = "completed"
@@ -390,6 +407,8 @@ def detect_local_live_modem(node_id, registry_by_node_imei):
     placeholder["node_status"] = current_local_node_status()
     placeholder["last_seen_node_id"] = node_id
     placeholder["last_seen_modem_id"] = "hilink0"
+    placeholder["known_to_node"] = False
+    placeholder["local_flashed"] = False
     return placeholder
 
 
@@ -399,6 +418,7 @@ def finalize_overview_shape(overview):
     overview.setdefault("nodes", [])
     overview.setdefault("modems", [])
     overview.setdefault("modem_registry", [])
+    overview.setdefault("flash_job", {})
     nodes = overview.get("nodes") or []
     modems = overview.get("modems") or []
     if not modems:
@@ -457,6 +477,63 @@ def finalize_overview_shape(overview):
         "modems_requires_flash": requires_flash_count,
         "modems_offline": offline_count,
     }
+    return overview
+
+
+def apply_local_flash_job(overview):
+    if not isinstance(overview, dict):
+        return overview
+
+    job = load_local_flash_job()
+    overview["flash_job"] = job or {}
+    if not isinstance(job, dict):
+        return overview
+
+    job_status = str(job.get("status") or "").strip().lower()
+    job_stage = str(job.get("stage") or "").strip().lower()
+    if job_status in ("completed", "done", "success"):
+        flash_status = "done"
+    elif job_status == "failed":
+        flash_status = "failed"
+    elif job_status:
+        flash_status = "running" if job_status not in ("queued",) else "queued"
+    else:
+        flash_status = ""
+    flash_stage = job_stage or job_status
+    flash_message = str(job.get("message") or job.get("error_message") or "").strip()
+    job_modem_id = str(job.get("modem_id") or "").strip()
+    job_imei = normalize_digits(job.get("imei"))
+
+    def same_job_modem(modem):
+        if not isinstance(modem, dict):
+            return False
+        modem_imei = normalize_digits(modem.get("imei"))
+        modem_id = str(modem.get("id") or "").strip()
+        if job_imei and modem_imei == job_imei:
+            return True
+        return bool(job_modem_id and modem_id == job_modem_id)
+
+    for modem in overview.get("modems", []) or []:
+        if not same_job_modem(modem):
+            continue
+        if flash_status:
+            modem["flash_status"] = flash_status
+        if flash_stage:
+            modem["flash_stage"] = flash_stage
+        if flash_message:
+            modem["flash_message"] = flash_message
+    for node in overview.get("nodes", []) or []:
+        if not isinstance(node, dict):
+            continue
+        for modem in node.get("modems", []) or []:
+            if not same_job_modem(modem):
+                continue
+            if flash_status:
+                modem["flash_status"] = flash_status
+            if flash_stage:
+                modem["flash_stage"] = flash_stage
+            if flash_message:
+                modem["flash_message"] = flash_message
     return overview
 
 
@@ -556,12 +633,14 @@ def enrich_overview_with_local_modem_state(overview):
         registry_item = registry_by_node_imei.get(node_imei_key) if node_imei_key else None
         local_number = int(by_stable_key.get(stable_key) or 0) if stable_key else 0
         local_flashed = bool(flashed.get(stable_key)) if stable_key else False
+        modem["known_to_node"] = bool(local_number > 0)
+        modem["local_flashed"] = local_flashed
 
         if registry_item:
             registry_number = int(registry_item.get("modem_number") or 0)
             if registry_number > 0:
                 modem["modem_number"] = registry_number
-            for field in ("provision_status", "last_seen_node_id", "last_seen_modem_id"):
+            for field in ("last_seen_node_id", "last_seen_modem_id"):
                 if str(registry_item.get(field) or "").strip():
                     modem[field] = registry_item[field]
 
@@ -571,7 +650,6 @@ def enrich_overview_with_local_modem_state(overview):
                 modem["ordinal"] = local_number
 
         if local_flashed:
-            registry_requires_flash = False
             active_flash_status = str(modem.get("flash_status") or "").strip().lower()
             active_flash_stage = str(modem.get("flash_stage") or "").strip().lower()
             flash_still_running = active_flash_status in ("queued", "running") or active_flash_stage in ("queued", "verify")
@@ -584,6 +662,13 @@ def enrich_overview_with_local_modem_state(overview):
                 modem["flash_stage"] = "completed"
                 number = int(modem.get("modem_number") or modem.get("ordinal") or 0)
                 modem["flash_message"] = f"flashing completed; label this modem as #{number} for this node" if number > 0 else "flashing completed"
+        elif local_number > 0:
+            modem["provision_status"] = "requires_flash"
+            modem["client_eligible"] = True
+            if not str(modem.get("provision_notes") or "").strip():
+                modem["provision_notes"] = "new modem assigned to this node; flash required"
+        elif not str(modem.get("provision_status") or "").strip():
+            modem["provision_status"] = "requires_flash"
         return modem
 
     top_level = []
@@ -614,87 +699,7 @@ def enrich_overview_with_local_modem_state(overview):
             else:
                 enriched.append(enrich_modem(modem))
         node_id = str(node.get("node_id") or "")
-        for item in registry_items:
-            if not isinstance(item, dict):
-                continue
-            item_node = str(item.get("node_id") or item.get("last_seen_node_id") or "").strip()
-            item_imei = normalize_digits(item.get("imei"))
-            if item_node != node_id or not item_imei:
-                continue
-            if f"{item_node}:{item_imei}" in active_registry_keys:
-                continue
-            enriched.append({
-                "id": f"stored-{item.get('modem_number') or item_imei[-4:]}",
-                "ordinal": int(item.get("modem_number") or 0),
-                "modem_number": int(item.get("modem_number") or 0),
-                "node_id": item_node,
-                "country": item.get("last_seen_country") or node.get("country") or "",
-                "node_status": node.get("node_status") or node.get("state") or "",
-                "imei": item.get("imei") or "",
-                "serial_number": item.get("serial_number") or "",
-                "device_name": item.get("device_name") or "E3372",
-                "product_family": item.get("product_family") or "",
-                "hardware_version": item.get("hardware_version") or "",
-                "software_version": item.get("software_version") or "",
-                "webui_version": item.get("webui_version") or "",
-                "state": "offline",
-                "wan_ip": item.get("last_seen_wan_ip") or "",
-                "signal_strength": item.get("last_signal_dbm") or 0,
-                "operator": item.get("last_operator") or "",
-                "technology": item.get("last_technology") or "",
-                "active_sessions": 0,
-                "port": 0,
-                "provision_status": item.get("provision_status") or "new",
-                "provision_notes": "known modem for this node",
-                "client_eligible": False,
-                "traffic_bytes_in": 0,
-                "traffic_bytes_out": 0,
-                "flash_status": "done" if item.get("provision_status") == "ready" else "",
-                "flash_stage": "completed" if item.get("provision_status") == "ready" else "",
-                "flash_message": f"known modem for this node; label remains #{int(item.get('modem_number') or 0)}" if int(item.get("modem_number") or 0) > 0 else "",
-                "last_seen_at": item.get("last_seen_at") or "",
-                "local_base_url": "",
-            })
         node["modems"] = enriched
-
-    for item in registry_items:
-        if not isinstance(item, dict):
-            continue
-        item_node = str(item.get("node_id") or item.get("last_seen_node_id") or "").strip()
-        item_imei = normalize_digits(item.get("imei"))
-        if not item_node or not item_imei or f"{item_node}:{item_imei}" in active_registry_keys:
-            continue
-        overview["modems"].append({
-            "id": f"stored-{item.get('modem_number') or item_imei[-4:]}",
-            "ordinal": int(item.get("modem_number") or 0),
-            "modem_number": int(item.get("modem_number") or 0),
-            "node_id": item_node,
-            "country": item.get("last_seen_country") or "",
-            "node_status": "offline",
-            "imei": item.get("imei") or "",
-            "serial_number": item.get("serial_number") or "",
-            "device_name": item.get("device_name") or "E3372",
-            "product_family": item.get("product_family") or "",
-            "hardware_version": item.get("hardware_version") or "",
-            "software_version": item.get("software_version") or "",
-            "webui_version": item.get("webui_version") or "",
-            "state": "offline",
-            "wan_ip": item.get("last_seen_wan_ip") or "",
-            "signal_strength": item.get("last_signal_dbm") or 0,
-            "operator": item.get("last_operator") or "",
-            "technology": item.get("last_technology") or "",
-            "active_sessions": 0,
-            "port": 0,
-            "provision_status": item.get("provision_status") or "new",
-            "provision_notes": "known modem for this node",
-            "client_eligible": False,
-            "traffic_bytes_in": 0,
-            "traffic_bytes_out": 0,
-            "flash_status": "done" if item.get("provision_status") == "ready" else "",
-            "flash_stage": "completed" if item.get("provision_status") == "ready" else "",
-            "flash_message": f"known modem for this node; label remains #{int(item.get('modem_number') or 0)}" if int(item.get("modem_number") or 0) > 0 else "",
-            "local_base_url": "",
-        })
     return overview
 
 
@@ -703,6 +708,7 @@ def inject_local_runtime_state(overview):
         overview = {}
 
     node_id = read_local_node_id().strip()
+    by_stable_key, flashed = load_local_modem_registry()
     registry_items = overview.get("modem_registry", []) or []
     registry_by_node_imei = {}
     for item in registry_items:
@@ -720,7 +726,7 @@ def inject_local_runtime_state(overview):
                 break
 
     local_status = current_local_node_status()
-    local_modem = detect_local_live_modem(node_id, registry_by_node_imei)
+    local_modem = detect_local_live_modem(node_id, registry_by_node_imei, by_stable_key, flashed)
 
     nodes = overview.setdefault("nodes", [])
     modems = overview.setdefault("modems", [])
@@ -869,6 +875,7 @@ def fetch_overview():
         try:
             enrich_overview_with_local_modem_state(cached)
             inject_local_runtime_state(cached)
+            apply_local_flash_job(cached)
             reconcile_aliases(cached)
         except Exception:
             pass
@@ -899,6 +906,7 @@ def rebuild_overview_snapshot():
         data.setdefault("main_server", MAIN_SERVER)
         enrich_overview_with_local_modem_state(data)
         inject_local_runtime_state(data)
+        apply_local_flash_job(data)
         reconcile_aliases(data)
     return data
 
