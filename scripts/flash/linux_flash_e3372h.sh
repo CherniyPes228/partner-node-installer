@@ -144,10 +144,10 @@ wait_adb_on_hilink() {
 
   while (( i < timeout )); do
     bring_usbnet_up
-    timeout 4 adb connect 192.168.8.1:5555 >/dev/null 2>&1 || true
-    timeout 4 adb connect 192.168.1.1:5555 >/dev/null 2>&1 || true
+    adb connect 192.168.8.1:5555 >/dev/null 2>&1 || true
+    adb connect 192.168.1.1:5555 >/dev/null 2>&1 || true
 
-    if timeout 4 adb devices 2>/dev/null | grep -qE '192\.168\.(8|1)\.1:5555'; then
+    if adb devices 2>/dev/null | grep -qE '192\.168\.(8|1)\.1:5555'; then
       return 0
     fi
 
@@ -162,13 +162,12 @@ godload_via_adb() {
   local attempt
   for attempt in 1 2 3 4 5; do
     log "ADB/GODLOAD attempt #$attempt"
-    timeout 4 adb start-server >/dev/null 2>&1 || true
     bring_usbnet_up
 
     if wait_adb_on_hilink 20; then
-      timeout 5 adb shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
-      timeout 5 adb -s 192.168.8.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
-      timeout 5 adb -s 192.168.1.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+      adb shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+      adb -s 192.168.8.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+      adb -s 192.168.1.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
     fi
 
     sleep 3
@@ -223,12 +222,14 @@ choose_flash_port_hilink() {
 
 stop_services() {
   stage "stop_services"
-  log "Stopping ModemManager"
+  log "Stopping ModemManager and NetworkManager"
   sudo systemctl stop ModemManager 2>/dev/null || true
+  sudo systemctl stop NetworkManager 2>/dev/null || true
 }
 
 start_services() {
-  log "Starting ModemManager"
+  log "Starting NetworkManager and ModemManager"
+  sudo systemctl start NetworkManager 2>/dev/null || true
   sudo systemctl start ModemManager 2>/dev/null || true
 }
 
@@ -367,9 +368,9 @@ adb_at_reset() {
   bring_usbnet_up
   wait_adb_on_hilink 20 || return 1
 
-  timeout 5 adb shell 'echo -e "AT^RESET\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
-  timeout 5 adb -s 192.168.8.1:5555 shell 'echo -e "AT^RESET\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
-  timeout 5 adb -s 192.168.1.1:5555 shell 'echo -e "AT^RESET\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+  adb shell 'echo -e "AT^RESET\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+  adb -s 192.168.8.1:5555 shell 'echo -e "AT^RESET\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+  adb -s 192.168.1.1:5555 shell 'echo -e "AT^RESET\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
 
   return 1
 }

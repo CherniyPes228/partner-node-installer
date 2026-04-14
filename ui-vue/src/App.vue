@@ -339,26 +339,7 @@ function syncFlashOverlayFromOverview() {
     return
   }
   if (flashOverlay.value.open && flashOverlay.value.key) {
-    const terminal = modems.value.find((item) => flashOverlayKeyForModem(item) === flashOverlay.value.key && ["done", "failed"].includes(String(item.flash_status || "").toLowerCase()))
-    if (terminal) {
-      if (String(terminal.flash_status || "").toLowerCase() === "done" && !canConfirmFlashCompletion(terminal)) {
-        flashOverlay.value = {
-          ...flashOverlay.value,
-          open: true,
-          status: "running",
-          stage: "verify",
-          message: "Firmware write finished. Waiting for the modem to reboot, bring the network back, and answer via WebUI before marking the process complete.",
-        }
-        return
-      }
-      flashOverlay.value = {
-        ...flashOverlay.value,
-        status: terminal.flash_status || "failed",
-        stage: terminal.flash_stage || terminal.flash_status || "failed",
-        message: terminal.flash_message || "Flash workflow finished.",
-      }
-      return
-    }
+    flashOverlay.value = { ...flashOverlay.value, open: false }
   }
 }
 

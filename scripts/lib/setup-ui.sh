@@ -387,11 +387,6 @@ def detect_local_live_modem(node_id, registry_by_node_imei, by_stable_key, flash
             "last_seen_modem_id": "hilink0",
         }
         modem.update(info)
-        if local_flashed and modem_has_target(modem.get("software_version"), modem.get("webui_version")):
-            number = int(modem.get("modem_number") or modem.get("ordinal") or 0)
-            modem["flash_status"] = "done"
-            modem["flash_stage"] = "completed"
-            modem["flash_message"] = f"flashing completed; label this modem as #{number} for this node" if number > 0 else "flashing completed"
         return modem
     placeholder = detect_local_huawei_hilink_placeholder()
     if not placeholder:
@@ -487,6 +482,23 @@ def apply_local_flash_job(overview):
     job = load_local_flash_job()
     overview["flash_job"] = job or {}
     if not isinstance(job, dict):
+        for modem in overview.get("modems", []) or []:
+            if not isinstance(modem, dict):
+                continue
+            if str(modem.get("flash_status") or "").strip().lower() in ("done", "failed"):
+                modem["flash_status"] = ""
+                modem["flash_stage"] = ""
+                modem["flash_message"] = ""
+        for node in overview.get("nodes", []) or []:
+            if not isinstance(node, dict):
+                continue
+            for modem in node.get("modems", []) or []:
+                if not isinstance(modem, dict):
+                    continue
+                if str(modem.get("flash_status") or "").strip().lower() in ("done", "failed"):
+                    modem["flash_status"] = ""
+                    modem["flash_stage"] = ""
+                    modem["flash_message"] = ""
         return overview
 
     job_status = str(job.get("status") or "").strip().lower()
@@ -657,11 +669,10 @@ def enrich_overview_with_local_modem_state(overview):
             modem["client_eligible"] = True
             if not str(modem.get("provision_notes") or "").strip():
                 modem["provision_notes"] = "known modem for this node"
-            if not flash_still_running and modem_has_target(modem.get("software_version"), modem.get("webui_version")):
-                modem["flash_status"] = "done"
-                modem["flash_stage"] = "completed"
-                number = int(modem.get("modem_number") or modem.get("ordinal") or 0)
-                modem["flash_message"] = f"flashing completed; label this modem as #{number} for this node" if number > 0 else "flashing completed"
+            if not flash_still_running and str(modem.get("flash_status") or "").strip().lower() in ("done", "failed"):
+                modem["flash_status"] = ""
+                modem["flash_stage"] = ""
+                modem["flash_message"] = ""
         elif local_number > 0:
             modem["provision_status"] = "requires_flash"
             modem["client_eligible"] = True
