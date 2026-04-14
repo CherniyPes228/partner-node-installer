@@ -353,7 +353,7 @@ def detect_local_live_modem(node_id, registry_by_node_imei):
             number = int(modem.get("modem_number") or modem.get("ordinal") or 0)
             modem["flash_status"] = "done"
             modem["flash_stage"] = "completed"
-                modem["flash_message"] = f"flashing completed; label this modem as #{number} for this node" if number > 0 else "flashing completed"
+            modem["flash_message"] = f"flashing completed; label this modem as #{number} for this node" if number > 0 else "flashing completed"
         return modem
     placeholder = detect_local_huawei_hilink_placeholder()
     if not placeholder:
