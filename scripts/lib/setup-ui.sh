@@ -229,6 +229,83 @@ def local_hilink_base_candidates():
     return candidates
 
 
+def detect_local_huawei_hilink_placeholder():
+    try:
+        lsusb = subprocess.run(
+            ["lsusb"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        usb_text = (lsusb.stdout or "").lower()
+        if "12d1:14dc" not in usb_text:
+            return None
+    except Exception:
+        return None
+
+    try:
+        ip_out = subprocess.run(
+            ["ip", "-o", "-4", "addr", "show"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        iface_name = ""
+        iface_ip = ""
+        for line in (ip_out.stdout or "").splitlines():
+            line = line.strip()
+            if " enx" not in f" {line}" and not line.startswith(tuple(str(i) for i in range(10))):
+                continue
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            name = parts[1]
+            cidr = parts[3]
+            ip = cidr.split("/", 1)[0].strip()
+            if not name.startswith("enx"):
+                continue
+            if ip.startswith("192.168.8.") or ip.startswith("192.168.1."):
+                iface_name = name
+                iface_ip = ip
+                break
+        if not iface_name:
+            return None
+    except Exception:
+        return None
+
+    base_url = "http://192.168.8.1" if iface_ip.startswith("192.168.8.") else "http://192.168.1.1"
+    return {
+        "id": "hilink0",
+        "ordinal": 0,
+        "modem_number": 0,
+        "usb_vendor_id": "12d1",
+        "usb_product_id": "14dc",
+        "usb_mode": "hilink",
+        "state": "detected",
+        "wan_ip": "",
+        "signal_strength": 0,
+        "operator": "",
+        "technology": "",
+        "active_sessions": 0,
+        "port": 31001,
+        "client_eligible": True,
+        "traffic_bytes_in": 0,
+        "traffic_bytes_out": 0,
+        "flash_status": "",
+        "flash_stage": "",
+        "flash_message": "",
+        "provision_status": "requires_flash",
+        "provision_notes": "huawei hilink modem detected; waiting for webui",
+        "device_name": "E3372",
+        "hardware_version": "",
+        "software_version": "",
+        "webui_version": "",
+        "product_family": "LTE",
+        "local_base_url": base_url,
+        "local_interface": iface_name,
+    }
+
+
 def detect_local_live_modem(node_id, registry_by_node_imei):
     for base_url in local_hilink_base_candidates():
         info = read_hilink_device_info(base_url)
@@ -276,9 +353,16 @@ def detect_local_live_modem(node_id, registry_by_node_imei):
             number = int(modem.get("modem_number") or modem.get("ordinal") or 0)
             modem["flash_status"] = "done"
             modem["flash_stage"] = "completed"
-            modem["flash_message"] = f"flashing completed; label this modem as #{number} for this node" if number > 0 else "flashing completed"
+                modem["flash_message"] = f"flashing completed; label this modem as #{number} for this node" if number > 0 else "flashing completed"
         return modem
-    return None
+    placeholder = detect_local_huawei_hilink_placeholder()
+    if not placeholder:
+        return None
+    placeholder["node_id"] = node_id
+    placeholder["node_status"] = current_local_node_status()
+    placeholder["last_seen_node_id"] = node_id
+    placeholder["last_seen_modem_id"] = "hilink0"
+    return placeholder
 
 
 def finalize_overview_shape(overview):

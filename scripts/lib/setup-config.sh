@@ -79,7 +79,7 @@ node:
   token: ""  # Will be populated after bootstrap
 
 modem:
-  discovery_interval: "30s"
+  discovery_interval: "5s"
   hilink:
     enabled: $HILINK_ENABLED
     base_url: "$HILINK_BASE_URL"
