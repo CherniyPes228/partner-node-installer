@@ -847,6 +847,14 @@ def fetch_overview():
         }
         updated_at = float(OVERVIEW_CACHE.get("updated_at") or 0.0)
         refreshing = bool(OVERVIEW_CACHE.get("refreshing"))
+    if isinstance(cached, dict):
+        try:
+            enrich_overview_with_local_modem_state(cached)
+            inject_local_runtime_state(cached)
+            reconcile_aliases(cached)
+        except Exception:
+            pass
+        cached = finalize_overview_shape(cached)
     if now - updated_at <= OVERVIEW_CACHE_TTL and cached:
         return cached
     if not refreshing:
