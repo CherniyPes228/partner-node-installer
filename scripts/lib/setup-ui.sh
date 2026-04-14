@@ -32,6 +32,7 @@ import json
 import mimetypes
 import os
 import re
+import sys
 import subprocess
 import threading
 import time
@@ -82,6 +83,16 @@ OVERVIEW_CACHE = {
     "refreshing": False,
     "error": "",
 }
+
+
+def ui_log(message, **fields):
+    parts = [f"[partner-node-ui] {message}"]
+    for key, value in fields.items():
+        parts.append(f"{key}={value}")
+    try:
+        print(" ".join(parts), file=sys.stderr, flush=True)
+    except Exception:
+        pass
 
 
 def json_request(url, method="GET", payload=None, timeout=MAIN_SERVER_TIMEOUT):
@@ -368,6 +379,13 @@ def detect_local_live_modem(node_id, registry_by_node_imei):
     placeholder = detect_local_huawei_hilink_placeholder()
     if not placeholder:
         return None
+    ui_log(
+        "local hilink placeholder detected",
+        node_id=node_id or "",
+        usb_product=placeholder.get("usb_product_id", ""),
+        local_interface=placeholder.get("local_interface", ""),
+        local_base_url=placeholder.get("local_base_url", ""),
+    )
     placeholder["node_id"] = node_id
     placeholder["node_status"] = current_local_node_status()
     placeholder["last_seen_node_id"] = node_id
@@ -856,8 +874,10 @@ def fetch_overview():
             pass
         cached = finalize_overview_shape(cached)
     if now - updated_at <= OVERVIEW_CACHE_TTL and cached:
+        ui_log("overview cache hit", updated_at=int(updated_at), modem_count=len(cached.get("modems", []) or []))
         return cached
     if not refreshing:
+        ui_log("overview cache stale; scheduling refresh", updated_at=int(updated_at), modem_count=len(cached.get("modems", []) or []))
         schedule_overview_refresh()
     return cached
 
@@ -891,6 +911,7 @@ def refresh_overview_cache():
         with OVERVIEW_CACHE_LOCK:
             OVERVIEW_CACHE["refreshing"] = False
             OVERVIEW_CACHE["error"] = str(err)
+        ui_log("overview refresh failed", error=str(err))
         return
 
     with OVERVIEW_CACHE_LOCK:
@@ -898,6 +919,7 @@ def refresh_overview_cache():
         OVERVIEW_CACHE["updated_at"] = time.time()
         OVERVIEW_CACHE["refreshing"] = False
         OVERVIEW_CACHE["error"] = error
+    ui_log("overview refresh complete", modem_count=len((data or {}).get("modems", []) or []), node_count=len((data or {}).get("nodes", []) or []))
 
 
 def schedule_overview_refresh():

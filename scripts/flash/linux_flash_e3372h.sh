@@ -437,6 +437,12 @@ main() {
   need_file "$USBLSAFE"
   need_file "$PTABLE"
 
+  log "Flash worker configuration:"
+  log "  modem_id=${MODEM_ID:-<none>} ordinal=${ORDINAL:-<none>}"
+  log "  flashbin=$FLASHBIN"
+  log "  main_fw=$MAIN_FW"
+  log "  webui_fw=$WEBUI_FW"
+
   stop_services
 
   stage "detect_modem"
