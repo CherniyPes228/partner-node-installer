@@ -53,14 +53,6 @@ need_file() {
   [[ -f "$1" ]] || die "missing file: $1"
 }
 
-adb_safe() {
-  timeout 4 adb "$@" >/dev/null 2>&1
-}
-
-ensure_adb_server() {
-  timeout 4 adb start-server >/dev/null 2>&1 || true
-}
-
 wait_dev_any() {
   local timeout="${1:-25}"
   local i=0
@@ -90,40 +82,9 @@ wait_huawei_state() {
   return 1
 }
 
-huawei_net_interfaces() {
-  local iface
-  local dev
-  local p
-
-  for iface in $(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|eth)' || true); do
-    dev="$(readlink -f "/sys/class/net/$iface/device" 2>/dev/null || true)"
-    p="$dev"
-    while [[ -n "$p" && "$p" != "/" ]]; do
-      if [[ -r "$p/idVendor" ]] && grep -qi '^12d1$' "$p/idVendor"; then
-        echo "$iface"
-        break
-      fi
-      p="$(dirname "$p")"
-    done
-  done
-}
-
-clean_non_huawei_net_addresses() {
-  local iface
-
-  for iface in $(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|eth)' || true); do
-    if ! huawei_net_interfaces | grep -qx "$iface"; then
-      sudo ip addr del 192.168.8.100/24 dev "$iface" 2>/dev/null || true
-      sudo ip addr del 192.168.1.100/24 dev "$iface" 2>/dev/null || true
-    fi
-  done
-}
-
 bring_usbnet_up() {
   local iface
-
-  clean_non_huawei_net_addresses
-  for iface in $(huawei_net_interfaces); do
+  for iface in $(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|eth)' || true); do
     sudo ip link set "$iface" up 2>/dev/null || true
     sudo ip addr add 192.168.8.100/24 dev "$iface" 2>/dev/null || true
     sudo ip addr add 192.168.1.100/24 dev "$iface" 2>/dev/null || true
@@ -138,7 +99,7 @@ recover_network() {
   bring_usbnet_up
   sleep 3
 
-  for iface in $(huawei_net_interfaces); do
+  for iface in $(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|eth)' || true); do
     sudo ip link set "$iface" up 2>/dev/null || true
     sudo ip addr add 192.168.8.100/24 dev "$iface" 2>/dev/null || true
     sudo ip addr add 192.168.1.100/24 dev "$iface" 2>/dev/null || true
@@ -181,11 +142,10 @@ wait_adb_on_hilink() {
   local timeout="${1:-40}"
   local i=0
 
-  ensure_adb_server
   while (( i < timeout )); do
     bring_usbnet_up
-    adb_safe connect 192.168.8.1:5555 || true
-    adb_safe connect 192.168.1.1:5555 || true
+    timeout 4 adb connect 192.168.8.1:5555 >/dev/null 2>&1 || true
+    timeout 4 adb connect 192.168.1.1:5555 >/dev/null 2>&1 || true
 
     if timeout 4 adb devices 2>/dev/null | grep -qE '192\.168\.(8|1)\.1:5555'; then
       return 0
@@ -201,7 +161,8 @@ wait_adb_on_hilink() {
 godload_via_adb() {
   local attempt
   for attempt in 1 2 3 4 5; do
-    log "ADB/GODLOAD attempt $attempt"
+    log "ADB/GODLOAD attempt #$attempt"
+    timeout 4 adb start-server >/dev/null 2>&1 || true
     bring_usbnet_up
 
     if wait_adb_on_hilink 20; then
@@ -212,7 +173,6 @@ godload_via_adb() {
 
     sleep 3
   done
-  log "ADB/GODLOAD did not succeed after repeated attempts"
   return 1
 }
 
@@ -261,12 +221,14 @@ choose_flash_port_hilink() {
 
 stop_services() {
   stage "stop_services"
-  log "Stopping ModemManager"
+  log "Stopping ModemManager and NetworkManager"
   sudo systemctl stop ModemManager 2>/dev/null || true
+  sudo systemctl stop NetworkManager 2>/dev/null || true
 }
 
 start_services() {
-  log "Starting ModemManager"
+  log "Starting NetworkManager and ModemManager"
+  sudo systemctl start NetworkManager 2>/dev/null || true
   sudo systemctl start ModemManager 2>/dev/null || true
 }
 
@@ -282,6 +244,7 @@ flash_main_no_needle() {
   stage "flash_main"
   for attempt in 1 2 3 4 5; do
     log "Main attempt #$attempt"
+
     for p in /dev/ttyUSB0 /dev/ttyUSB1 /dev/ttyUSB2; do
       [[ -e "$p" ]] || continue
       log "Trying main via $p"
@@ -369,7 +332,7 @@ wait_post_flash_state() {
 
 get_live_modem_iface() {
   local iface
-  for iface in $(huawei_net_interfaces); do
+  for iface in $(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|eth)' || true); do
     if ip link show "$iface" 2>/dev/null | grep -q "LOWER_UP"; then
       echo "$iface"
       return 0
@@ -385,10 +348,12 @@ wait_live_modem_iface() {
 
   while (( i < timeout )); do
     bring_usbnet_up
+
     if iface="$(get_live_modem_iface 2>/dev/null)"; then
       echo "$iface"
       return 0
     fi
+
     sleep 2
     ((i+=2))
   done
@@ -421,7 +386,7 @@ post_webui_recover() {
   bring_usbnet_up
   sleep 5
 
-  adb_at_reset || log "ADB reset did not work, continuing"
+  adb_at_reset || log "ADB reset did not work, continuing without it"
 
   log "Waiting for a live modem network interface"
   if iface="$(wait_live_modem_iface 60)"; then
@@ -438,9 +403,9 @@ post_webui_recover() {
 main() {
   need_cmd lsusb
   need_cmd adb
-  need_cmd flock
   need_cmd usb_modeswitch
   need_cmd sudo
+  need_cmd flock
 
   need_file "$FLASHBIN"
   need_file "$MAIN_FW"
@@ -468,7 +433,7 @@ main() {
   ls /dev/ttyUSB* 2>/dev/null || true
 
   log "Step 2. Entering flash mode without needle"
-  enter_flash_mode || die "failed to send AT^GODLOAD; for stock HiLink you may need debug mode"
+  enter_flash_mode || die "failed to send AT^GODLOAD; stock HiLink may require debug mode"
   sleep 4
 
   stage "wait_serial"
@@ -505,8 +470,6 @@ main() {
   log "Step 8. If the modem is still in flash mode, trying -r"
   port="$(cat /tmp/e3372_last_flash_port 2>/dev/null || true)"
   if [[ -n "${port:-}" && -e "${port:-/dev/null}" ]]; then
-    printf 'AT^RESET\r' | sudo tee "$port" >/dev/null || true
-    sleep 2
     sudo "$FLASHBIN" -p "$port" -r || true
   fi
 
