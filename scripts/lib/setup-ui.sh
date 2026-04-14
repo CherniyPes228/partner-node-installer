@@ -231,6 +231,7 @@ def local_hilink_base_candidates():
 
 def detect_local_huawei_hilink_placeholder():
     recognized_products = ("14dc", "14db", "1505", "1506")
+    product_id = ""
     try:
         lsusb = subprocess.run(
             ["lsusb"],
@@ -239,11 +240,17 @@ def detect_local_huawei_hilink_placeholder():
             check=False,
         )
         usb_text = (lsusb.stdout or "").lower()
-        if not any(f"12d1:{product}" in usb_text for product in recognized_products):
+        for candidate in recognized_products:
+            if f"12d1:{candidate}" in usb_text:
+                product_id = candidate
+                break
+        if not product_id:
             return None
     except Exception:
         return None
 
+    iface_name = ""
+    iface_ip = ""
     try:
         ip_out = subprocess.run(
             ["ip", "-o", "-4", "addr", "show"],
@@ -269,18 +276,20 @@ def detect_local_huawei_hilink_placeholder():
                 iface_name = name
                 iface_ip = ip
                 break
-        if not iface_name:
-            return None
     except Exception:
-        return None
+        pass
 
-    base_url = "http://192.168.8.1" if iface_ip.startswith("192.168.8.") else "http://192.168.1.1"
+    base_url = ""
+    if iface_ip.startswith("192.168.8."):
+        base_url = "http://192.168.8.1"
+    elif iface_ip.startswith("192.168.1."):
+        base_url = "http://192.168.1.1"
     return {
         "id": "hilink0",
         "ordinal": 0,
         "modem_number": 0,
         "usb_vendor_id": "12d1",
-        "usb_product_id": "",
+        "usb_product_id": product_id,
         "usb_mode": "hilink",
         "state": "detected",
         "wan_ip": "",
@@ -693,7 +702,7 @@ def inject_local_runtime_state(overview):
                 break
 
     local_status = current_local_node_status()
-    local_modem = detect_local_live_modem(node_id, registry_by_node_imei) if node_id else None
+    local_modem = detect_local_live_modem(node_id, registry_by_node_imei)
 
     nodes = overview.setdefault("nodes", [])
     modems = overview.setdefault("modems", [])
@@ -723,8 +732,26 @@ def inject_local_runtime_state(overview):
         if local_status == "online":
             overview["last_heartbeat_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-    if not local_modem or not node_id:
+    if not local_modem:
         return finalize_overview_shape(overview)
+
+    if not node_id:
+        node_id = str(local_modem.get("node_id") or overview.get("node_id") or "local-node").strip()
+        local_modem["node_id"] = node_id
+        node_entry = {
+            "node_id": node_id,
+            "node_status": local_status,
+            "country": "",
+            "external_ip": "",
+            "modems": [],
+            "active_sessions": 0,
+            "bytes_in_total": 0,
+            "bytes_out_total": 0,
+            "last_heartbeat_at": "",
+        }
+        nodes.append(node_entry)
+        overview["node_id"] = node_id
+        overview["node_status"] = local_status
 
     active_key = f"{node_id}:{normalize_digits(local_modem.get('imei')) or local_modem.get('id')}"
 
