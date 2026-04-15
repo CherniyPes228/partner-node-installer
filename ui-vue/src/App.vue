@@ -130,6 +130,34 @@ const activeFlashModem = computed(() => modems.value.find((item) => ["queued", "
 const activeFlashNodeId = computed(() => String(flashJob.value?.node_id || activeFlashModem.value?.node_id || "").trim())
 const TARGET_MAIN_VERSION = "22.200.15.00.00"
 const TARGET_WEBUI_VERSION = "17.100.13.113.03"
+const FLASH_DISMISS_STORAGE_KEY = "partner-node.flash.dismissed-job"
+
+function loadDismissedFlashJobKey() {
+  try {
+    return String(window.localStorage.getItem(FLASH_DISMISS_STORAGE_KEY) || "").trim()
+  } catch {
+    return ""
+  }
+}
+
+function storeDismissedFlashJobKey(value) {
+  try {
+    if (value) {
+      window.localStorage.setItem(FLASH_DISMISS_STORAGE_KEY, value)
+    } else {
+      window.localStorage.removeItem(FLASH_DISMISS_STORAGE_KEY)
+    }
+  } catch {
+  }
+}
+
+function currentFlashJobStorageKey(job) {
+  if (!job || typeof job !== "object") return ""
+  const jobId = String(job.job_id || "").trim()
+  const status = String(job.status || "").trim().toLowerCase()
+  if (!jobId || !status) return ""
+  return `${jobId}:${status}`
+}
 
 function isActiveFlashJob(job) {
   const status = String(job?.status || "").trim().toLowerCase()
@@ -258,16 +286,30 @@ function openFlashOverlay(label, status = "queued", stage = "queued", message = 
 }
 
 function closeFlashOverlay() {
+  if (flashJob.value && isTerminalFlashJob(flashJob.value)) {
+    storeDismissedFlashJobKey(currentFlashJobStorageKey(flashJob.value))
+  }
   flashOverlay.value = { ...flashOverlay.value, open: false }
 }
 
 function syncFlashOverlayFromOverview() {
   if (flashJob.value) {
+    const dismissedKey = loadDismissedFlashJobKey()
+    const currentKey = currentFlashJobStorageKey(flashJob.value)
     const target = flashJobTargetModem(flashJob.value)
     const number = target ? localModemNumber(target) : (Number(flashJob.value.ordinal || 0) || "?")
     const idLabel = target?.id || flashJob.value.modem_id || "modem"
     const nodeLabel = target?.node_id || flashJob.value.node_id || ""
     const label = `#${number} • ${idLabel}${nodeLabel ? ` • ${nodeLabel}` : ""}`
+    if (isActiveFlashJob(flashJob.value) && currentKey && currentKey !== dismissedKey) {
+      storeDismissedFlashJobKey("")
+    }
+    if (isTerminalFlashJob(flashJob.value) && currentKey && currentKey === dismissedKey) {
+      if (flashOverlay.value.open) {
+        flashOverlay.value = { ...flashOverlay.value, open: false }
+      }
+      return
+    }
     if (isActiveFlashJob(flashJob.value) || isTerminalFlashJob(flashJob.value)) {
       flashOverlay.value = {
         open: true,
