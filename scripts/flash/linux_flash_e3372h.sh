@@ -84,10 +84,34 @@ wait_huawei_state() {
 
 bring_usbnet_up() {
   local iface
-  for iface in $(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|eth)' || true); do
+  for iface in $(list_huawei_ifaces); do
     sudo ip link set "$iface" up 2>/dev/null || true
     sudo ip addr add 192.168.8.100/24 dev "$iface" 2>/dev/null || true
     sudo ip addr add 192.168.1.100/24 dev "$iface" 2>/dev/null || true
+  done
+}
+
+iface_usb_vendor() {
+  local iface="$1"
+  local path=""
+  path="$(readlink -f "/sys/class/net/$iface/device" 2>/dev/null || true)"
+  while [[ -n "$path" && "$path" != "/" ]]; do
+    if [[ -f "$path/idVendor" ]]; then
+      cat "$path/idVendor" 2>/dev/null || true
+      return 0
+    fi
+    path="$(dirname "$path")"
+  done
+  return 1
+}
+
+list_huawei_ifaces() {
+  local iface vendor
+  for iface in $(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|eth)' || true); do
+    vendor="$(iface_usb_vendor "$iface" 2>/dev/null || true)"
+    if [[ "$vendor" == "12d1" ]]; then
+      echo "$iface"
+    fi
   done
 }
 
@@ -99,7 +123,7 @@ recover_network() {
   bring_usbnet_up
   sleep 3
 
-  for iface in $(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|eth)' || true); do
+  for iface in $(list_huawei_ifaces); do
     sudo ip link set "$iface" up 2>/dev/null || true
     sudo ip addr add 192.168.8.100/24 dev "$iface" 2>/dev/null || true
     sudo ip addr add 192.168.1.100/24 dev "$iface" 2>/dev/null || true
@@ -222,15 +246,11 @@ choose_flash_port_hilink() {
 
 stop_services() {
   stage "stop_services"
-  log "Stopping ModemManager and NetworkManager"
-  sudo systemctl stop ModemManager 2>/dev/null || true
-  sudo systemctl stop NetworkManager 2>/dev/null || true
+  log "Skipping ModemManager/NetworkManager stop"
 }
 
 start_services() {
-  log "Starting NetworkManager and ModemManager"
-  sudo systemctl start NetworkManager 2>/dev/null || true
-  sudo systemctl start ModemManager 2>/dev/null || true
+  log "Skipping ModemManager/NetworkManager start"
 }
 
 cleanup() {
@@ -333,7 +353,7 @@ wait_post_flash_state() {
 
 get_live_modem_iface() {
   local iface
-  for iface in $(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|eth)' || true); do
+  for iface in $(list_huawei_ifaces); do
     if ip link show "$iface" 2>/dev/null | grep -q "LOWER_UP"; then
       echo "$iface"
       return 0
