@@ -186,6 +186,24 @@ wait_adb_on_hilink() {
   return 1
 }
 
+wait_flash_mode_after_godload() {
+  local timeout="${1:-8}"
+  local i=0
+
+  while (( i < timeout )); do
+    if ls /dev/ttyUSB* >/dev/null 2>&1; then
+      return 0
+    fi
+    if lsusb | grep -Eq '12d1:(1442|1506|14db|10c6)'; then
+      return 0
+    fi
+    sleep 1
+    ((i+=1))
+  done
+
+  return 1
+}
+
 godload_via_adb() {
   local attempt
   for attempt in 1 2 3 4 5; do
@@ -193,9 +211,22 @@ godload_via_adb() {
     bring_usbnet_up
 
     if wait_adb_on_hilink 20; then
-      adb shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
-      adb -s 192.168.8.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
-      adb -s 192.168.1.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+      if adb shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1; then
+        log "AT^GODLOAD accepted via default adb shell"
+      elif adb -s 192.168.8.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1; then
+        log "AT^GODLOAD accepted via adb -s 192.168.8.1:5555"
+      elif adb -s 192.168.1.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1; then
+        log "AT^GODLOAD accepted via adb -s 192.168.1.1:5555"
+      else
+        sleep 3
+        continue
+      fi
+
+      log "Waiting for ttyUSB/flash PID after AT^GODLOAD"
+      if wait_flash_mode_after_godload 8; then
+        return 0
+      fi
+      log "Flash mode did not appear yet after AT^GODLOAD, retrying"
     fi
 
     sleep 3
