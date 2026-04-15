@@ -168,10 +168,14 @@ wait_adb_on_hilink() {
 
   while (( i < timeout )); do
     bring_usbnet_up
-    adb connect 192.168.8.1:5555 >/dev/null 2>&1 || true
-    adb connect 192.168.1.1:5555 >/dev/null 2>&1 || true
+    timeout 4 adb connect 192.168.8.1:5555 >/dev/null 2>&1 || true
 
-    if adb devices 2>/dev/null | grep -qE '192\.168\.(8|1)\.1:5555'; then
+    if adb devices 2>/dev/null | grep -q '192\.168\.8\.1:5555'; then
+      return 0
+    fi
+
+    timeout 4 adb connect 192.168.1.1:5555 >/dev/null 2>&1 || true
+    if adb devices 2>/dev/null | grep -q '192\.168\.1\.1:5555'; then
       return 0
     fi
 
