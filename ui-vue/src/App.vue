@@ -103,6 +103,7 @@ const modems = computed(() => Array.isArray(overview.value?.modems) ? overview.v
 const commandHistory = computed(() => Array.isArray(overview.value?.last_results) ? overview.value.last_results : [])
 const partnerBalance = computed(() => overview.value?.partner_balance || {})
 const flashJob = computed(() => (overview.value && typeof overview.value.flash_job === "object" && overview.value.flash_job) ? overview.value.flash_job : null)
+const flashNotice = computed(() => (overview.value && typeof overview.value.flash_notice === "object" && overview.value.flash_notice) ? overview.value.flash_notice : null)
 const billingByKey = computed(() => {
   const map = {}
   for (const item of modemBilling.value) map[`${item.node_id}:${item.modem_id}`] = item
@@ -151,7 +152,7 @@ function storeDismissedFlashJobKey(value) {
   }
 }
 
-function currentFlashJobStorageKey(job) {
+function currentFlashStorageKey(job) {
   if (!job || typeof job !== "object") return ""
   const jobId = String(job.job_id || "").trim()
   const status = String(job.status || "").trim().toLowerCase()
@@ -161,7 +162,7 @@ function currentFlashJobStorageKey(job) {
 
 function isActiveFlashJob(job) {
   const status = String(job?.status || "").trim().toLowerCase()
-  return ["queued", "entering_flash", "waiting_serial", "flashing_main", "flashing_webui", "rebooting", "recovering_network", "verifying", "running"].includes(status)
+  return ["queued", "running"].includes(status)
 }
 
 function isTerminalFlashJob(job) {
@@ -250,12 +251,6 @@ function normalizedFlashOverlayStatus(status) {
   return "queued"
 }
 
-function flashProgressPercent(status) {
-  const normalized = normalizedFlashOverlayStatus(status)
-  if (normalized === "completed" || normalized === "failed") return 100
-  return 15
-}
-
 function flashStatusLabel(status) {
   const normalized = normalizedFlashOverlayStatus(status)
   if (normalized === "completed") return "Flashing finished"
@@ -286,31 +281,20 @@ function openFlashOverlay(label, status = "queued", stage = "queued", message = 
 }
 
 function closeFlashOverlay() {
-  if (flashJob.value && isTerminalFlashJob(flashJob.value)) {
-    storeDismissedFlashJobKey(currentFlashJobStorageKey(flashJob.value))
+  if (flashNotice.value && isTerminalFlashJob(flashNotice.value)) {
+    storeDismissedFlashJobKey(currentFlashStorageKey(flashNotice.value))
   }
   flashOverlay.value = { ...flashOverlay.value, open: false }
 }
 
 function syncFlashOverlayFromOverview() {
   if (flashJob.value) {
-    const dismissedKey = loadDismissedFlashJobKey()
-    const currentKey = currentFlashJobStorageKey(flashJob.value)
     const target = flashJobTargetModem(flashJob.value)
     const number = target ? localModemNumber(target) : (Number(flashJob.value.ordinal || 0) || "?")
     const idLabel = target?.id || flashJob.value.modem_id || "modem"
     const nodeLabel = target?.node_id || flashJob.value.node_id || ""
     const label = `#${number} • ${idLabel}${nodeLabel ? ` • ${nodeLabel}` : ""}`
-    if (isActiveFlashJob(flashJob.value) && currentKey && currentKey !== dismissedKey) {
-      storeDismissedFlashJobKey("")
-    }
-    if (isTerminalFlashJob(flashJob.value) && currentKey && currentKey === dismissedKey) {
-      if (flashOverlay.value.open) {
-        flashOverlay.value = { ...flashOverlay.value, open: false }
-      }
-      return
-    }
-    if (isActiveFlashJob(flashJob.value) || isTerminalFlashJob(flashJob.value)) {
+    if (isActiveFlashJob(flashJob.value)) {
       flashOverlay.value = {
         open: true,
         status: flashJob.value.status || "running",
@@ -323,16 +307,27 @@ function syncFlashOverlayFromOverview() {
       return
     }
   }
-  const current = activeFlashModem.value
-  if (current) {
-    const label = `#${localModemNumber(current)} • ${current.id}${current.node_id ? ` • ${current.node_id}` : ""}`
+  if (flashNotice.value && isTerminalFlashJob(flashNotice.value)) {
+    const dismissedKey = loadDismissedFlashJobKey()
+    const currentKey = currentFlashStorageKey(flashNotice.value)
+    if (currentKey && currentKey === dismissedKey) {
+      if (flashOverlay.value.open) {
+        flashOverlay.value = { ...flashOverlay.value, open: false }
+      }
+      return
+    }
+    const target = flashJobTargetModem(flashNotice.value)
+    const number = target ? localModemNumber(target) : (Number(flashNotice.value.ordinal || 0) || "?")
+    const idLabel = target?.id || flashNotice.value.modem_id || "modem"
+    const nodeLabel = target?.node_id || flashNotice.value.node_id || ""
     flashOverlay.value = {
       open: true,
-      status: current.flash_status || "running",
-      stage: current.flash_stage || "running",
-      message: flashOverlayBody(current.flash_status, current.flash_message),
-      label,
-      key: flashOverlayKeyForModem(current),
+      status: flashNotice.value.status || "completed",
+      stage: "",
+      message: flashOverlayBody(flashNotice.value.status, flashNotice.value.message),
+      label: `#${number} • ${idLabel}${nodeLabel ? ` • ${nodeLabel}` : ""}`,
+      key: flashOverlayKeyForModem(target || { node_id: nodeLabel, id: idLabel, imei: flashNotice.value.imei || "" }),
+      startedAt: flashOverlay.value.startedAt || Date.now(),
     }
     return
   }
@@ -1025,25 +1020,12 @@ onBeforeUnmount(() => { closeRealtime(); clearRefreshTimer(); if (fallbackTimer)
             <span class="font-medium">{{ flashStatusLabel(flashOverlay.status) }}</span>
             <Badge :variant="tone(normalizedFlashOverlayStatus(flashOverlay.status))" class="rounded-full capitalize">{{ normalizedFlashOverlayStatus(flashOverlay.status) }}</Badge>
           </div>
-          <div class="h-3 overflow-hidden rounded-full bg-muted">
-            <div
-              v-if="normalizedFlashOverlayStatus(flashOverlay.status) === 'running'"
-              class="h-full w-full rounded-full bg-primary/80 animate-pulse"
-            />
-            <div
-              v-else
-              class="h-full rounded-full transition-all duration-500"
-              :class="normalizedFlashOverlayStatus(flashOverlay.status) === 'failed' ? 'bg-destructive' : 'bg-primary'"
-              :style="{ width: `${flashProgressPercent(flashOverlay.status)}%` }"
-            />
-          </div>
-          <div class="flex items-center justify-between text-xs text-muted-foreground">
-            <span>{{ normalizedFlashOverlayStatus(flashOverlay.status) === 'running' ? "running" : `${flashProgressPercent(flashOverlay.status)}%` }}</span>
-            <span>{{ normalizedFlashOverlayStatus(flashOverlay.status) }}</span>
+          <div class="rounded-[24px] border border-border/70 bg-muted/40 p-4 text-sm leading-6">
+            {{ flashOverlayBody(flashOverlay.status, flashOverlay.message) }}
           </div>
         </div>
-        <div class="mt-6 rounded-[24px] border border-border/70 bg-muted/40 p-4 text-sm leading-6">
-          {{ flashOverlayBody(flashOverlay.status, flashOverlay.message) }}
+        <div v-if="normalizedFlashOverlayStatus(flashOverlay.status) === 'running'" class="mt-6 h-3 overflow-hidden rounded-full bg-muted">
+          <div class="h-full w-full rounded-full bg-primary/80 animate-pulse" />
         </div>
       </div>
     </div>

@@ -53,6 +53,7 @@ MODEM_ALIAS_PORT = int(os.environ.get("MODEM_ALIAS_PORT", "80"))
 CONFIG_PATH = os.environ.get("PARTNER_NODE_CONFIG", "/etc/partner-node/config.yaml")
 LOCAL_MODEM_REGISTRY_PATH = os.environ.get("PARTNER_NODE_MODEM_REGISTRY", "/var/lib/partner-node/modem_ordinal_registry.json")
 LOCAL_FLASH_JOB_PATH = os.environ.get("PARTNER_NODE_FLASH_JOB", "/var/lib/partner-node/flash_job_state.json")
+LOCAL_FLASH_NOTICE_PATH = os.environ.get("PARTNER_NODE_FLASH_NOTICE", "/var/lib/partner-node/flash_notice_state.json")
 NODE_CREDENTIALS_PATH = os.environ.get("PARTNER_NODE_CREDENTIALS", "/var/lib/partner-node/node_credentials")
 TARGET_MAIN_VERSION = "22.200.15.00.00"
 TARGET_WEBUI_VERSION = "17.100.13.113.03"
@@ -197,6 +198,15 @@ def load_local_flash_job():
         if not isinstance(job, dict):
             return None
         return job
+    except Exception:
+        return None
+
+
+def load_local_flash_notice():
+    try:
+        with open(LOCAL_FLASH_NOTICE_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else None
     except Exception:
         return None
 
@@ -414,6 +424,7 @@ def finalize_overview_shape(overview):
     overview.setdefault("modems", [])
     overview.setdefault("modem_registry", [])
     overview.setdefault("flash_job", {})
+    overview.setdefault("flash_notice", {})
     nodes = overview.get("nodes") or []
     modems = overview.get("modems") or []
     if not modems:
@@ -480,37 +491,35 @@ def apply_local_flash_job(overview):
         return overview
 
     job = load_local_flash_job()
+    notice = load_local_flash_notice()
+    job_status = str((job or {}).get("status") or "").strip().lower()
+    if job_status not in ("queued", "running"):
+        job = None
     overview["flash_job"] = job or {}
-    if not isinstance(job, dict):
-        for modem in overview.get("modems", []) or []:
+    overview["flash_notice"] = notice or {}
+
+    for modem in overview.get("modems", []) or []:
+        if not isinstance(modem, dict):
+            continue
+        modem["flash_status"] = ""
+        modem["flash_stage"] = ""
+        modem["flash_message"] = ""
+    for node in overview.get("nodes", []) or []:
+        if not isinstance(node, dict):
+            continue
+        for modem in node.get("modems", []) or []:
             if not isinstance(modem, dict):
                 continue
-            if str(modem.get("flash_status") or "").strip().lower() in ("done", "failed"):
-                modem["flash_status"] = ""
-                modem["flash_stage"] = ""
-                modem["flash_message"] = ""
-        for node in overview.get("nodes", []) or []:
-            if not isinstance(node, dict):
-                continue
-            for modem in node.get("modems", []) or []:
-                if not isinstance(modem, dict):
-                    continue
-                if str(modem.get("flash_status") or "").strip().lower() in ("done", "failed"):
-                    modem["flash_status"] = ""
-                    modem["flash_stage"] = ""
-                    modem["flash_message"] = ""
+            modem["flash_status"] = ""
+            modem["flash_stage"] = ""
+            modem["flash_message"] = ""
+
+    if not isinstance(job, dict):
         return overview
 
     job_status = str(job.get("status") or "").strip().lower()
     job_stage = str(job.get("stage") or "").strip().lower()
-    if job_status in ("completed", "done", "success"):
-        flash_status = "done"
-    elif job_status == "failed":
-        flash_status = "failed"
-    elif job_status:
-        flash_status = "running" if job_status not in ("queued",) else "queued"
-    else:
-        flash_status = ""
+    flash_status = "running" if job_status not in ("queued",) else "queued"
     flash_stage = job_stage or job_status
     flash_message = str(job.get("message") or job.get("error_message") or "").strip()
     job_modem_id = str(job.get("modem_id") or "").strip()
