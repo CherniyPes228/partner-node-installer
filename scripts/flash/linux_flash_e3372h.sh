@@ -388,11 +388,11 @@ adb_at_reset() {
   log "Trying AT^RESET via ADB"
 
   bring_usbnet_up
-  wait_adb_on_hilink 20 || return 1
+  wait_adb_on_hilink 6 || return 1
 
-  adb shell 'echo -e "AT^RESET\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
-  adb -s 192.168.8.1:5555 shell 'echo -e "AT^RESET\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
-  adb -s 192.168.1.1:5555 shell 'echo -e "AT^RESET\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+  timeout 5 adb -s 192.168.8.1:5555 shell "sh -c 'printf AT^RESET\\r >/dev/appvcom1'" >/dev/null 2>&1 && return 0
+  timeout 5 adb -s 192.168.1.1:5555 shell "sh -c 'printf AT^RESET\\r >/dev/appvcom1'" >/dev/null 2>&1 && return 0
+  timeout 5 adb shell "sh -c 'printf AT^RESET\\r >/dev/appvcom1'" >/dev/null 2>&1 && return 0
 
   return 1
 }
@@ -407,7 +407,7 @@ post_webui_recover() {
 
   log "Bringing up temporary network for ADB/API access"
   bring_usbnet_up
-  sleep 5
+  sleep 3
 
   adb_at_reset || log "ADB reset did not work, continuing without it"
 
