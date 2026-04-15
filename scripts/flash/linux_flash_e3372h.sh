@@ -193,17 +193,9 @@ godload_via_adb() {
     bring_usbnet_up
 
     if wait_adb_on_hilink 20; then
-      timeout 5 adb -s 192.168.8.1:5555 shell "sh -c 'printf AT^GODLOAD\\r >/dev/appvcom1'" >/dev/null 2>&1 || true
-      timeout 5 adb -s 192.168.1.1:5555 shell "sh -c 'printf AT^GODLOAD\\r >/dev/appvcom1'" >/dev/null 2>&1 || true
-      timeout 5 adb shell "sh -c 'printf AT^GODLOAD\\r >/dev/appvcom1'" >/dev/null 2>&1 || true
-
-      sleep 2
-      if ls /dev/ttyUSB* >/dev/null 2>&1; then
-        return 0
-      fi
-      if lsusb | grep -Eq '12d1:(1442|1506|14db|10c6)'; then
-        return 0
-      fi
+      timeout 5 adb shell "sh -c 'printf AT^GODLOAD\\r >/dev/appvcom1'" >/dev/null 2>&1 && return 0
+      timeout 5 adb -s 192.168.8.1:5555 shell "sh -c 'printf AT^GODLOAD\\r >/dev/appvcom1'" >/dev/null 2>&1 && return 0
+      timeout 5 adb -s 192.168.1.1:5555 shell "sh -c 'printf AT^GODLOAD\\r >/dev/appvcom1'" >/dev/null 2>&1 && return 0
     fi
 
     sleep 3
