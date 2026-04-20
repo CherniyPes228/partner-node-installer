@@ -609,7 +609,7 @@ modem:
   health_check_interval: 60s
   flash:
     enabled: ${MODEM_FLASH_ENABLED}
-    script_path: "/usr/local/sbin/partner-node-flash-hilink.sh"
+    script_path: "/usr/local/sbin/partner-node-provision-hilink.sh"
   rotation:
     default_method: "${MODEM_ROTATION_METHOD}"
   hilink:
@@ -981,16 +981,18 @@ EOF
 }
 
 write_flash_script() {
-  local flash_script needle_script ip_script raw_base
-  flash_script="/usr/local/sbin/partner-node-flash-hilink.sh"
+  local flash_script hilink_flash_script needle_script ip_script raw_base
+  flash_script="/usr/local/sbin/partner-node-provision-hilink.sh"
+  hilink_flash_script="/usr/local/sbin/partner-node-flash-hilink.sh"
   needle_script="/usr/local/sbin/partner-node-needle-mod.sh"
   ip_script="/usr/local/sbin/partner-node-set-modem-ip.sh"
   raw_base="https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main"
 
-  curl -fsSL "${raw_base}/scripts/flash/hilink_flash_321_auto.sh" -o "${flash_script}"
+  curl -fsSL "${raw_base}/scripts/flash/hilink_provision.sh" -o "${flash_script}"
+  curl -fsSL "${raw_base}/scripts/flash/hilink_flash_321_auto.sh" -o "${hilink_flash_script}"
   curl -fsSL "${raw_base}/scripts/flash/needle_mod.sh" -o "${needle_script}"
   curl -fsSL "${raw_base}/scripts/flash/hilink_set_ip.sh" -o "${ip_script}"
-  chmod 0755 "${flash_script}" "${needle_script}" "${ip_script}"
+  chmod 0755 "${flash_script}" "${hilink_flash_script}" "${needle_script}" "${ip_script}"
   ln -sf "${needle_script}" /usr/local/sbin/recover-e3372h-needle
   ln -sf "${needle_script}" /usr/local/sbin/recover-e3372h-clean
   return 0

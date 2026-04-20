@@ -872,7 +872,7 @@ def write_flash_settings(auto_enabled):
     elif "  flash:\n" in content:
         updated = content.replace("  flash:\n", f"  flash:\n{replacement}\n", 1)
     else:
-        updated = content.rstrip() + f"\n  flash:\n    enabled: true\n{replacement}\n    script_path: \"/usr/local/sbin/partner-node-flash-hilink.sh\"\n"
+        updated = content.rstrip() + f"\n  flash:\n    enabled: true\n{replacement}\n    script_path: \"/usr/local/sbin/partner-node-provision-hilink.sh\"\n"
     with open(CONFIG_PATH, "w", encoding="utf-8") as fh:
         fh.write(updated)
     subprocess.Popen(["systemctl", "restart", "partner-node"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

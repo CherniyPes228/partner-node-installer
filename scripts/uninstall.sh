@@ -212,6 +212,7 @@ main() {
   remove_if_exists "/usr/local/bin/auto-modem-setup.sh"
   remove_if_exists "/usr/local/sbin/partner-node-self-update.sh"
   remove_if_exists "/usr/local/sbin/partner-node-flash-e3372h.sh"
+  remove_if_exists "/usr/local/sbin/partner-node-provision-hilink.sh"
   remove_if_exists "/usr/local/sbin/partner-node-flash-hilink.sh"
   remove_if_exists "/usr/local/sbin/partner-node-needle-mod.sh"
   remove_if_exists "/usr/local/sbin/partner-node-set-modem-ip.sh"

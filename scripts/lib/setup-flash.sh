@@ -11,14 +11,15 @@ MODEM_FLASH_ENABLED="${MODEM_FLASH_ENABLED:-true}"
 FLASH_ASSETS_BASE_URL="${FLASH_ASSETS_BASE_URL:-https://chatmod.warforgalaxy.com/downloads/partner-node/flash}"
 FLASH_ASSETS_FALLBACK_BASE_URL="${FLASH_ASSETS_FALLBACK_BASE_URL:-https://raw.githubusercontent.com/CherniyPes228/moderation_chat/main/public/downloads/partner-node/flash}"
 FLASH_ROOT="${FLASH_ROOT:-/opt/partner-node-flash}"
-FLASH_SCRIPT_PATH="${MODEM_FLASH_SCRIPT_PATH:-/usr/local/sbin/partner-node-flash-hilink.sh}"
+FLASH_SCRIPT_PATH="${MODEM_FLASH_SCRIPT_PATH:-/usr/local/sbin/partner-node-provision-hilink.sh}"
+FLASH_WORKER_PATH="${MODEM_HILINK_FLASH_PATH:-/usr/local/sbin/partner-node-flash-hilink.sh}"
 MANUAL_RECOVERY_PATH="${MODEM_NEEDLE_RECOVERY_PATH:-/usr/local/sbin/partner-node-needle-mod.sh}"
 MODEM_IP_SCRIPT_PATH="${MODEM_SET_IP_SCRIPT_PATH:-/usr/local/sbin/partner-node-set-modem-ip.sh}"
 INSTALLER_RAW_BASE_URL="${INSTALLER_RAW_BASE_URL:-https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main}"
 FLASH_SCRIPT_SOURCE_BASE_URL="${FLASH_SCRIPT_SOURCE_BASE_URL:-${INSTALLER_RAW_BASE_URL}}"
 
 write_flash_script() {
-  download_asset "${FLASH_SCRIPT_SOURCE_BASE_URL}/scripts/flash/hilink_flash_321_auto.sh" "${FLASH_SCRIPT_PATH}"
+  download_asset "${FLASH_SCRIPT_SOURCE_BASE_URL}/scripts/flash/hilink_provision.sh" "${FLASH_SCRIPT_PATH}"
   chmod 0755 "${FLASH_SCRIPT_PATH}"
 }
 
@@ -92,7 +93,7 @@ setup_flash() {
   local tools_dir images_dir
   tools_dir="${FLASH_ROOT}/tools"
   images_dir="${FLASH_ROOT}/images"
-  mkdir -p "${tools_dir}" "${images_dir}" "$(dirname "${FLASH_SCRIPT_PATH}")"
+  mkdir -p "${tools_dir}" "${images_dir}" "$(dirname "${FLASH_SCRIPT_PATH}")" "$(dirname "${FLASH_WORKER_PATH}")"
 
   log_info "Downloading safe flash assets from ${FLASH_ASSETS_BASE_URL}"
   download_asset_with_fallback "balong-usbload" "${tools_dir}/balong-usbload"
@@ -108,6 +109,8 @@ setup_flash() {
   chmod 0644 "${tools_dir}/ptable-hilink.bin" "${tools_dir}/usblsafe-3372h.bin" || true
   chmod 0644 "${images_dir}/"*.bin || true
   write_flash_script
+  download_asset "${FLASH_SCRIPT_SOURCE_BASE_URL}/scripts/flash/hilink_flash_321_auto.sh" "${FLASH_WORKER_PATH}"
+  chmod 0755 "${FLASH_WORKER_PATH}"
   install_manual_recovery
   log_info "Safe flash assets are installed into ${FLASH_ROOT}"
   log_info "✅ Flash setup complete"
