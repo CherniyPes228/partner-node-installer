@@ -2,6 +2,11 @@
 set -euo pipefail
 
 ORDINAL=""
+if [[ "$(id -u)" -eq 0 ]]; then
+  SUDO=()
+else
+  SUDO=(sudo)
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -53,6 +58,7 @@ current_hilink_bases() {
   local addr=""
   local base=""
   local seen=""
+  local octet=""
 
   iface="$(get_live_modem_iface 2>/dev/null || true)"
   if [[ -n "$iface" ]]; then
@@ -64,6 +70,24 @@ current_hilink_bases() {
         seen="$seen $base"
       fi
     done < <(ip -4 -o addr show dev "$iface" scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+  fi
+
+  while IFS= read -r addr; do
+    [[ "$addr" =~ ^192\.168\.[0-9]+\.[0-9]+$ ]] || continue
+    base="http://${addr%.*}.1"
+    if [[ " $seen " != *" $base "* ]]; then
+      printf '%s\n' "$base"
+      seen="$seen $base"
+    fi
+  done < <(ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
+
+  octet="$(ordinal_octet "${ORDINAL:-}" 2>/dev/null || true)"
+  if [[ -n "$octet" ]]; then
+    base="http://192.168.${octet}.1"
+    if [[ " $seen " != *" $base "* ]]; then
+      printf '%s\n' "$base"
+      seen="$seen $base"
+    fi
   fi
 
   for base in "http://192.168.8.1" "http://192.168.1.1"; do
@@ -146,10 +170,10 @@ wait_for_base() {
 apply_dhcp_mode() {
   local iface="$1"
   [[ -n "$iface" ]] || return 1
-  sudo ip link set "$iface" up 2>/dev/null || true
-  sudo ip addr flush dev "$iface" 2>/dev/null || true
+  "${SUDO[@]}" ip link set "$iface" up 2>/dev/null || true
+  "${SUDO[@]}" ip addr flush dev "$iface" 2>/dev/null || true
   if command -v nmcli >/dev/null 2>&1; then
-    sudo nmcli connection modify "$iface" \
+    "${SUDO[@]}" nmcli connection modify "$iface" \
       ipv4.method auto \
       ipv4.addresses "" \
       ipv4.gateway "" \
@@ -159,8 +183,8 @@ apply_dhcp_mode() {
       ipv4.ignore-auto-dns no \
       ipv4.never-default yes \
       ipv6.method link-local 2>/dev/null || true
-    sudo nmcli device reapply "$iface" 2>/dev/null || true
-    sudo nmcli connection up "$iface" 2>/dev/null || true
+    "${SUDO[@]}" nmcli device reapply "$iface" 2>/dev/null || true
+    "${SUDO[@]}" nmcli connection up "$iface" 2>/dev/null || true
   fi
   return 0
 }

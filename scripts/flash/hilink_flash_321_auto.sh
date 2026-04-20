@@ -18,6 +18,12 @@ PTABLE="$TOOLS_DIR/ptable-hilink.bin"
 NM_ONLY_UDEV_RULE="/run/udev/rules.d/99-partner-node-nm-only.rules"
 NM_ONLY_USB_PORT=""
 NM_ONLY_NET_IFACE=""
+ADB_STATE_DIR="${ADB_STATE_DIR:-/var/lib/partner-node/adb-home}"
+if [[ "$(id -u)" -eq 0 ]]; then
+  SUDO=()
+else
+  SUDO=(sudo)
+fi
 
 log() {
   printf '\n[%s] %s\n' "$(date +%H:%M:%S)" "$*"
@@ -34,6 +40,14 @@ need_cmd() {
 
 need_file() {
   [[ -f "$1" ]] || die "Не найден файл: $1"
+}
+
+init_adb_env() {
+  mkdir -p "${ADB_STATE_DIR}/.android"
+  chmod 700 "${ADB_STATE_DIR}" "${ADB_STATE_DIR}/.android" 2>/dev/null || true
+  export HOME="${ADB_STATE_DIR}"
+  export ANDROID_SDK_HOME="${ADB_STATE_DIR}"
+  export ADB_VENDOR_KEYS="${ADB_STATE_DIR}/.android"
 }
 
 wait_dev_any() {
@@ -73,8 +87,8 @@ bring_usbnet_up() {
     [[ "$iface" =~ ^(enx|usb|eth) ]] || continue
 
     if udevadm info -q property -p "/sys/class/net/$iface" 2>/dev/null | grep -q '^ID_VENDOR_ID=12d1$'; then
-      sudo ip addr flush dev "$iface" 2>/dev/null || true
-      sudo ip link set "$iface" up 2>/dev/null || true
+      "${SUDO[@]}" ip addr flush dev "$iface" 2>/dev/null || true
+      "${SUDO[@]}" ip link set "$iface" up 2>/dev/null || true
       #sudo ip addr add 192.168.8.100/24 dev "$iface" 2>/dev/null || true
       #sudo ip addr add 192.168.1.100/24 dev "$iface" 2>/dev/null || true
     fi
@@ -92,7 +106,7 @@ recover_network() {
   sleep 3
 
   for iface in $(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|eth)' || true); do
-    sudo ip link set "$iface" up 2>/dev/null || true
+    "${SUDO[@]}" ip link set "$iface" up 2>/dev/null || true
     #sudo ip addr add 192.168.8.100/24 dev "$iface" 2>/dev/null || true
     #sudo ip addr add 192.168.1.100/24 dev "$iface" 2>/dev/null || true
     #sudo ip route replace 192.168.8.0/24 dev "$iface" 2>/dev/null || true
@@ -120,7 +134,7 @@ ensure_hilink_mode() {
 
     if lsusb | grep -q '12d1:1f01'; then
       log "Вижу 12d1:1f01, переключаю в 14dc через usb_modeswitch"
-      sudo usb_modeswitch -J -v 0x12d1 -p 0x1f01 || true
+      "${SUDO[@]}" usb_modeswitch -J -v 0x12d1 -p 0x1f01 || true
     fi
 
     sleep 2
@@ -134,12 +148,13 @@ wait_adb_on_hilink() {
   local timeout="${1:-40}"
   local i=0
 
+  init_adb_env
   while (( i < timeout )); do
     bring_usbnet_up
-    adb connect 192.168.8.1:5555 >/dev/null 2>&1 || true
-    adb connect 192.168.1.1:5555 >/dev/null 2>&1 || true
+    timeout 5 adb connect 192.168.8.1:5555 >/dev/null 2>&1 || true
+    timeout 5 adb connect 192.168.1.1:5555 >/dev/null 2>&1 || true
 
-    if adb devices | grep -qE '192\.168\.(8|1)\.1:5555'; then
+    if timeout 5 adb devices | grep -qE '192\.168\.(8|1)\.1:5555'; then
       return 0
     fi
 
@@ -158,7 +173,7 @@ flush_non_huawei_usbnet() {
     [[ "$iface" =~ ^(enx|usb|eth) ]] || continue
 
     if ! udevadm info -q property -p "/sys/class/net/$iface" 2>/dev/null | grep -q '^ID_VENDOR_ID=12d1$'; then
-      sudo ip addr flush dev "$iface" 2>/dev/null || true
+      "${SUDO[@]}" ip addr flush dev "$iface" 2>/dev/null || true
     fi
   done
 }
@@ -257,6 +272,7 @@ enable_debug_mode() {
 
 godload_via_adb() {
   local attempt
+  init_adb_env
   for attempt in 1 2 3 4 5; do
     log "ADB/GODLOAD попытка #$attempt"
     bring_usbnet_up
@@ -277,7 +293,7 @@ send_godload_any() {
   for p in /dev/ttyUSB0 /dev/ttyUSB1 /dev/ttyUSB2; do
     [[ -e "$p" ]] || continue
     log "Отправляю AT^GODLOAD в $p"
-    echo -e "AT^GODLOAD\r" | sudo tee "$p" >/dev/null || true
+    echo -e "AT^GODLOAD\r" | "${SUDO[@]}" tee "$p" >/dev/null || true
     sleep 2
     return 0
   done
@@ -353,42 +369,42 @@ disable_network_manager_for_modem() {
   iface="$(find_huawei_net_iface 2>/dev/null || true)"
   NM_ONLY_NET_IFACE="$iface"
 
-  sudo mkdir -p /run/udev/rules.d
-  cat <<EOF | sudo tee "$NM_ONLY_UDEV_RULE" >/dev/null
+  "${SUDO[@]}" mkdir -p /run/udev/rules.d
+  cat <<EOF | "${SUDO[@]}" tee "$NM_ONLY_UDEV_RULE" >/dev/null
 ACTION=="add|change", SUBSYSTEM=="net", KERNELS=="${usb_port}", ENV{NM_UNMANAGED}="1"
 EOF
 
-  sudo udevadm control --reload-rules || true
+  "${SUDO[@]}" udevadm control --reload-rules || true
   if [[ -e "/sys/bus/usb/devices/${usb_port}" ]]; then
-    sudo udevadm trigger --action=change "/sys/bus/usb/devices/${usb_port}" || true
+    "${SUDO[@]}" udevadm trigger --action=change "/sys/bus/usb/devices/${usb_port}" || true
   fi
 
   if [[ -n "$iface" ]] && command -v nmcli >/dev/null 2>&1; then
-    sudo nmcli device set "$iface" managed no 2>/dev/null || true
+    "${SUDO[@]}" nmcli device set "$iface" managed no 2>/dev/null || true
   fi
 }
 
 enable_network_manager_for_modem() {
   if [[ -f "$NM_ONLY_UDEV_RULE" ]]; then
-    sudo rm -f "$NM_ONLY_UDEV_RULE" || true
-    sudo udevadm control --reload-rules || true
+    "${SUDO[@]}" rm -f "$NM_ONLY_UDEV_RULE" || true
+    "${SUDO[@]}" udevadm control --reload-rules || true
   fi
 
   if [[ -n "${NM_ONLY_NET_IFACE:-}" ]] && command -v nmcli >/dev/null 2>&1; then
-    sudo nmcli device set "$NM_ONLY_NET_IFACE" managed yes 2>/dev/null || true
+    "${SUDO[@]}" nmcli device set "$NM_ONLY_NET_IFACE" managed yes 2>/dev/null || true
   fi
 }
 
 stop_services() {
   log "Останавливаю ModemManager и отключаю NetworkManager только для модема"
-  sudo systemctl stop ModemManager 2>/dev/null || true
+  "${SUDO[@]}" systemctl stop ModemManager 2>/dev/null || true
   disable_network_manager_for_modem
 }
 
 start_services() {
   log "Возвращаю NetworkManager для модема и запускаю ModemManager"
   enable_network_manager_for_modem
-  sudo systemctl start ModemManager 2>/dev/null || true
+  "${SUDO[@]}" systemctl start ModemManager 2>/dev/null || true
 }
 
 cleanup() {
@@ -406,7 +422,7 @@ flash_main_no_needle() {
     for p in /dev/ttyUSB0 /dev/ttyUSB1 /dev/ttyUSB2; do
       [[ -e "$p" ]] || continue
       log "Пробую main через $p"
-      if sudo env BALONG_RELAX_DATAMODE=1 "$FLASHBIN" -p "$p" "$MAIN_FW"; then
+      if "${SUDO[@]}" env BALONG_RELAX_DATAMODE=1 "$FLASHBIN" -p "$p" "$MAIN_FW"; then
         echo "$p" > /tmp/e3372_last_flash_port
         sleep 2
         return 0
@@ -435,7 +451,7 @@ flash_webui_no_needle() {
     # 1. Сначала пробуем тем же портом, которым зашла main
     if [[ -n "$flash_port" && -e "$flash_port" ]]; then
       log "Пробую WebUI через основной порт $flash_port"
-      if sudo env BALONG_RELAX_DATAMODE=1 "$FLASHBIN" -p "$flash_port" "$WEBUI_FW"; then
+      if "${SUDO[@]}" env BALONG_RELAX_DATAMODE=1 "$FLASHBIN" -p "$flash_port" "$WEBUI_FW"; then
         log "WebUI прошилась через $flash_port"
         sleep 3
         return 0
@@ -448,7 +464,7 @@ flash_webui_no_needle() {
       [[ -e "$p" ]] || continue
       [[ "$p" == "$flash_port" ]] && continue
       log "Пробую WebUI через $p"
-      if sudo env BALONG_RELAX_DATAMODE=1 "$FLASHBIN" -p "$p" "$WEBUI_FW"; then
+      if "${SUDO[@]}" env BALONG_RELAX_DATAMODE=1 "$FLASHBIN" -p "$p" "$WEBUI_FW"; then
         log "WebUI прошилась через $p"
         echo "$p" > /tmp/e3372_last_flash_port
         sleep 3
@@ -530,6 +546,7 @@ wait_live_modem_iface() {
 }
 
 adb_at_reset() {
+  init_adb_env
   log "Пробую сделать AT^RESET через ADB"
 
   bring_usbnet_up
@@ -558,9 +575,9 @@ post_webui_recover() {
   log "Жду живой сетевой интерфейс модема"
   if iface="$(wait_live_modem_iface 60)"; then
     log "Живой интерфейс модема: $iface"
-    sudo ip link set "$iface" up 2>/dev/null || true
-    sudo ip route replace 192.168.8.0/24 dev "$iface" 2>/dev/null || true
-    sudo ip route replace 192.168.1.0/24 dev "$iface" 2>/dev/null || true
+    "${SUDO[@]}" ip link set "$iface" up 2>/dev/null || true
+    "${SUDO[@]}" ip route replace 192.168.8.0/24 dev "$iface" 2>/dev/null || true
+    "${SUDO[@]}" ip route replace 192.168.1.0/24 dev "$iface" 2>/dev/null || true
     return 0
   fi
 
@@ -571,7 +588,9 @@ main() {
   need_cmd lsusb
   need_cmd adb
   need_cmd usb_modeswitch
-  need_cmd sudo
+  if (( ${#SUDO[@]} )); then
+    need_cmd sudo
+  fi
 
   need_file "$FLASHBIN"
   need_file "$MAIN_FW"
@@ -608,19 +627,22 @@ port="$(choose_flash_port_hilink)" || die "Не удалось выбрать п
 log "Порт прошивки: $port"
 
 if [[ -n "${FULL_FW:-}" ]]; then
+  echo "STAGE:flash_main"
   log "Шаг 4. Шью полную прошивку одним файлом"
-  sudo env BALONG_RELAX_DATAMODE=1 "$FLASHBIN" -p "$port" "$FULL_FW"
+  "${SUDO[@]}" env BALONG_RELAX_DATAMODE=1 "$FLASHBIN" -p "$port" "$FULL_FW"
 else
   log "Шаг 4. Шью main"
   flash_main_no_needle || die "Main firmware не прошилась без иглы"
 
   # после retry main берём актуальный порт ещё раз
   port="$(choose_flash_port_hilink)" || true
+  echo "STAGE:flash_webui"
   log "Шаг 5. Шью WebUI с ретраями"
   flash_webui_no_needle "$port" || die "WebUI не прошилась без иглы"
 fi
 
   log "Шаг 6. Жду пост-прошивочное состояние модема"
+  echo "STAGE:verify"
   wait_post_flash_state 60 || true
   lsusb
   ls /dev/ttyUSB* 2>/dev/null || true

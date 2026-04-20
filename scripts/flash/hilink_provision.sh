@@ -74,6 +74,24 @@ find_hilink_base() {
   return 1
 }
 
+wait_for_hilink_base() {
+  local timeout="${1:-120}"
+  local i=0
+  local base=""
+
+  while (( i < timeout )); do
+    base="$(find_hilink_base 2>/dev/null || true)"
+    if [[ -n "$base" ]]; then
+      printf '%s' "$base"
+      return 0
+    fi
+    sleep 2
+    ((i+=2))
+  done
+
+  return 1
+}
+
 main() {
   local base=""
 
@@ -91,8 +109,12 @@ main() {
     log "Stock HiLink detected on 192.168.8.1, running full flash"
     "$FLASH_SCRIPT" --modem-id "${MODEM_ID}" --ordinal "${ORDINAL}"
 
+    log "Waiting for flashed modem to come back as live HiLink before LAN IP switch"
+    base="$(wait_for_hilink_base 120 2>/dev/null || true)"
+    [[ -n "$base" ]] || die "flashed modem did not come back as live HiLink"
+
     echo "STAGE:set_ip"
-    log "Flash completed, switching modem LAN IP for ordinal ${ORDINAL}"
+    log "Flash completed on ${base}, switching modem LAN IP for ordinal ${ORDINAL}"
     "$SET_IP_SCRIPT" --ordinal "${ORDINAL}"
     echo "STAGE:completed"
     return 0
