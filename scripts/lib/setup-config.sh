@@ -16,7 +16,7 @@ HILINK_BASE_URL="${HILINK_BASE_URL:-}"
 HILINK_TIMEOUT="${HILINK_TIMEOUT:-15s}"
 SUPPORT_SSH_USER="${SUPPORT_SSH_USER:-}"
 MODEM_FLASH_ENABLED="${MODEM_FLASH_ENABLED:-true}"
-MODEM_FLASH_SCRIPT_PATH="${MODEM_FLASH_SCRIPT_PATH:-/usr/local/sbin/partner-node-flash-e3372h.sh}"
+MODEM_FLASH_SCRIPT_PATH="${MODEM_FLASH_SCRIPT_PATH:-/usr/local/sbin/partner-node-flash-hilink.sh}"
 
 detect_support_user() {
   if [[ -n "$SUPPORT_SSH_USER" ]]; then

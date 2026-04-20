@@ -18,7 +18,7 @@ MODEM_ROTATION_METHOD="auto" # auto|mmcli|api
 HILINK_ENABLED="true"
 HILINK_BASE_URL=""
 HILINK_TIMEOUT="15s"
-MODEM_FLASH_ENABLED="false"  # Disabled until testing complete
+MODEM_FLASH_ENABLED="true"
 FLASH_ASSETS_BASE_URL=""  # Will be set if modem flashing is enabled
 THREEPROXY_VERSION="0.9.5"
 THREEPROXY_PACKAGE_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/3proxy.deb"
@@ -609,7 +609,7 @@ modem:
   health_check_interval: 60s
   flash:
     enabled: ${MODEM_FLASH_ENABLED}
-    script_path: "/usr/local/sbin/partner-node-flash-e3372h.sh"
+    script_path: "/usr/local/sbin/partner-node-flash-hilink.sh"
   rotation:
     default_method: "${MODEM_ROTATION_METHOD}"
   hilink:
@@ -981,8 +981,19 @@ EOF
 }
 
 write_flash_script() {
-  local flash_script
-  flash_script="/usr/local/sbin/partner-node-flash-e3372h.sh"
+  local flash_script needle_script ip_script raw_base
+  flash_script="/usr/local/sbin/partner-node-flash-hilink.sh"
+  needle_script="/usr/local/sbin/partner-node-needle-mod.sh"
+  ip_script="/usr/local/sbin/partner-node-set-modem-ip.sh"
+  raw_base="https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main"
+
+  curl -fsSL "${raw_base}/scripts/flash/hilink_flash_321_auto.sh" -o "${flash_script}"
+  curl -fsSL "${raw_base}/scripts/flash/needle_mod.sh" -o "${needle_script}"
+  curl -fsSL "${raw_base}/scripts/flash/hilink_set_ip.sh" -o "${ip_script}"
+  chmod 0755 "${flash_script}" "${needle_script}" "${ip_script}"
+  ln -sf "${needle_script}" /usr/local/sbin/recover-e3372h-needle
+  ln -sf "${needle_script}" /usr/local/sbin/recover-e3372h-clean
+  return 0
   cat > "${flash_script}" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -1009,7 +1020,7 @@ USBLSAFE="${USBLSAFE:-${TOOLS_DIR}/usblsafe-3372h.bin}"
 RECOVERY_IMAGE="${RECOVERY_IMAGE:-${IMAGES_DIR}/E3372h-153_Update_21.329.62.00.209.bin}"
 INTERMEDIATE_IMAGE="${INTERMEDIATE_IMAGE:-${IMAGES_DIR}/E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin}"
 MAIN_IMAGE="${MAIN_IMAGE:-${IMAGES_DIR}/E3372h-153_Update_22.200.15.00.00_M_AT_05.10.bin}"
-WEBUI_IMAGE="${WEBUI_IMAGE:-${IMAGES_DIR}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin}"
+WEBUI_IMAGE="${WEBUI_IMAGE:-${IMAGES_DIR}/WEBUI_17.100.05.06.965_Mod1.16_V7R11_CPIO.bin}"
 RECOVERY_MAIN_IMAGE_209="${RECOVERY_MAIN_IMAGE_209:-${IMAGES_DIR}/E3372h-153_Update_22.333.63.00.209_to_00.raw.bin}"
 RECOVERY_WEBUI_IMAGE_209="${RECOVERY_WEBUI_IMAGE_209:-${IMAGES_DIR}/WEBUI_17.100.18.03.143_HILINK_Mod1.21_BV7R11HS_CPIO.bin}"
 TARGET_MAIN_VERSION="${TARGET_MAIN_VERSION:-22.200.15.00.00}"
@@ -1665,13 +1676,13 @@ install_flash_assets() {
   download_asset_with_fallback "balong_flash" "${tools}/balong_flash"
   download_asset_with_fallback "usbloader-3372h.bin" "${tools}/usbloader-3372h.bin"
   download_asset_with_fallback "usblsafe-3372h.bin" "${tools}/usblsafe-3372h.bin"
+  download_asset "https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/assets/balong_flash_recover_linux_amd64" "${tools}/balong_flash_recover"
+  download_asset "https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/assets/ptable-hilink.bin" "${tools}/ptable-hilink.bin"
 
-  download_asset_with_fallback "E3372h-153_Update_21.329.62.00.209.bin" "${images}/E3372h-153_Update_21.329.62.00.209.bin"
-  download_asset_with_fallback "E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin" "${images}/E3372h-153_Update_21.329.05.00.00_M_01.10_for_.143.bin"
   download_asset_with_fallback "E3372h-153_Update_22.200.15.00.00_M_AT_05.10.bin" "${images}/E3372h-153_Update_22.200.15.00.00_M_AT_05.10.bin"
-  download_asset_with_fallback "Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin" "${images}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13.bin"
-  download_asset_with_fallback "E3372h-153_Update_22.333.63.00.209_to_00.raw.bin" "${images}/E3372h-153_Update_22.333.63.00.209_to_00.raw.bin"
-  download_asset_with_fallback "WEBUI_17.100.18.03.143_HILINK_Mod1.21_BV7R11HS_CPIO.bin" "${images}/WEBUI_17.100.18.03.143_HILINK_Mod1.21_BV7R11HS_CPIO.bin"
+  download_asset_with_fallback "E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin" "${images}/E3372h-153_Update_22.333.01.00.00_M_AT_05.10.bin"
+  download_asset_with_fallback "Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13_E3372h_local-upd.bin" "${images}/Update_WEBUI_17.100.13.01.03_HILINK_Mod1.13_E3372h_local-upd.bin"
+  download_asset_with_fallback "WEBUI_17.100.05.06.965_Mod1.16_V7R11_CPIO.bin" "${images}/WEBUI_17.100.05.06.965_Mod1.16_V7R11_CPIO.bin"
 
   if [[ "${failures}" -gt 0 ]]; then
     log_warn "Modem flash assets are incomplete (${failures} failed downloads); disabling modem flash."
@@ -1679,8 +1690,8 @@ install_flash_assets() {
     return 0
   fi
 
-  chmod 0755 "${tools}/balong-usbload" "${tools}/balong_flash" || true
-  chmod 0644 "${tools}/usbloader-3372h.bin" "${tools}/usblsafe-3372h.bin" || true
+  chmod 0755 "${tools}/balong-usbload" "${tools}/balong_flash" "${tools}/balong_flash_recover" || true
+  chmod 0644 "${tools}/usbloader-3372h.bin" "${tools}/usblsafe-3372h.bin" "${tools}/ptable-hilink.bin" || true
   chmod 0644 "${images}/"*.bin || true
   log_info "Modem flash assets installed into ${root}"
 }
