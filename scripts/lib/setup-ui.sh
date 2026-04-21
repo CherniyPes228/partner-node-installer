@@ -55,6 +55,11 @@ LOCAL_MODEM_REGISTRY_PATH = os.environ.get("PARTNER_NODE_MODEM_REGISTRY", "/var/
 LOCAL_FLASH_JOB_PATH = os.environ.get("PARTNER_NODE_FLASH_JOB", "/var/lib/partner-node/flash_job_state.json")
 LOCAL_FLASH_NOTICE_PATH = os.environ.get("PARTNER_NODE_FLASH_NOTICE", "/var/lib/partner-node/flash_notice_state.json")
 NODE_CREDENTIALS_PATH = os.environ.get("PARTNER_NODE_CREDENTIALS", "/var/lib/partner-node/node_credentials")
+LOCAL_MODEM_STATE_PATHS = (
+    LOCAL_MODEM_REGISTRY_PATH,
+    LOCAL_FLASH_JOB_PATH,
+    LOCAL_FLASH_NOTICE_PATH,
+)
 TARGET_MAIN_VERSION = "22.200.15.00.00"
 TARGET_WEBUI_VERSION = "17.100.13.113.03"
 TARGET_WEBUI_LABEL = "17.100.13.01.03"
@@ -221,6 +226,80 @@ def read_local_node_id():
     except Exception:
         return ""
     return ""
+
+
+def reset_overview_cache():
+    with OVERVIEW_CACHE_LOCK:
+        OVERVIEW_CACHE["data"] = {
+            "partner_key": PARTNER_KEY,
+            "main_server": MAIN_SERVER,
+            "nodes": [],
+            "modems": [],
+            "modem_registry": [],
+        }
+        OVERVIEW_CACHE["updated_at"] = 0.0
+        OVERVIEW_CACHE["refreshing"] = False
+        OVERVIEW_CACHE["error"] = ""
+
+
+def clear_local_modem_state_files():
+    removed = []
+    for path in LOCAL_MODEM_STATE_PATHS:
+        path = str(path or "").strip()
+        if not path:
+            continue
+        try:
+            os.remove(path)
+            removed.append(path)
+        except FileNotFoundError:
+            continue
+        except Exception as err:
+            raise RuntimeError(f"failed to remove {path}: {err}") from err
+    return removed
+
+
+def best_effort_reset_server_node_registry():
+    node_id = read_local_node_id()
+    if not PARTNER_KEY or not MAIN_SERVER or not node_id:
+        return False
+    try:
+        json_request(
+            f"{MAIN_SERVER}/api/partner/reset-node",
+            method="POST",
+            payload={"partner_key": PARTNER_KEY, "node_id": node_id},
+        )
+        return True
+    except Exception as err:
+        ui_log("server-side modem registry reset failed", node_id=node_id, error=str(err))
+        return False
+
+
+def restart_partner_node_service():
+    result = subprocess.run(
+        ["systemctl", "restart", "partner-node"],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=40,
+    )
+    if result.returncode != 0:
+        stderr = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(f"failed to restart partner-node: {stderr or result.returncode}")
+
+
+def reset_local_modem_state():
+    removed = clear_local_modem_state_files()
+    server_reset = best_effort_reset_server_node_registry()
+    restart_partner_node_service()
+    reset_overview_cache()
+    schedule_overview_refresh()
+    return {
+        "ok": True,
+        "node_id": read_local_node_id(),
+        "removed_files": removed,
+        "server_registry_reset": server_reset,
+        "restarted_service": "partner-node",
+    }
 
 
 def local_service_active(service_name):
@@ -1287,6 +1366,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(200, write_flash_settings(auto_enabled))
             except Exception as err:
                 self._send_text(400, str(err))
+            return
+
+        if self.path == "/api/local/reset-modems":
+            try:
+                self._send_json(200, reset_local_modem_state())
+            except Exception as err:
+                self._send_text(500, str(err))
             return
 
         if self.path != "/api/command":
