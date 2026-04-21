@@ -206,10 +206,11 @@ function localModemNumber(modem) {
 }
 
 function aliasUrlForModem(modem) {
-  if (!String(modem?.local_base_url || "").trim()) return ""
+  const base = String(modem?.local_base_url || "").trim()
+  if (base) return base
   const number = Number(localModemNumber(modem))
   if (!Number.isFinite(number) || number <= 0) return ""
-  return `http://172.31.${number}.1`
+  return `http://192.168.${100 + number}.1`
 }
 
 function isTargetFlashed(modem) {
