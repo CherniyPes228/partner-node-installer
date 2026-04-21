@@ -274,9 +274,9 @@ def best_effort_reset_server_node_registry():
         return False
 
 
-def restart_partner_node_service():
+def run_systemctl(*args):
     result = subprocess.run(
-        ["systemctl", "restart", "partner-node"],
+        ["systemctl", *args],
         capture_output=True,
         text=True,
         check=False,
@@ -284,13 +284,26 @@ def restart_partner_node_service():
     )
     if result.returncode != 0:
         stderr = (result.stderr or result.stdout or "").strip()
-        raise RuntimeError(f"failed to restart partner-node: {stderr or result.returncode}")
+        raise RuntimeError(f"failed to run systemctl {' '.join(args)}: {stderr or result.returncode}")
+
+
+def restart_partner_node_service():
+    run_systemctl("restart", "partner-node")
+
+
+def stop_partner_node_service():
+    run_systemctl("stop", "partner-node")
+
+
+def start_partner_node_service():
+    run_systemctl("start", "partner-node")
 
 
 def reset_local_modem_state():
+    stop_partner_node_service()
     removed = clear_local_modem_state_files()
     server_reset = best_effort_reset_server_node_registry()
-    restart_partner_node_service()
+    start_partner_node_service()
     reset_overview_cache()
     schedule_overview_refresh()
     return {
@@ -772,6 +785,7 @@ def enrich_overview_with_local_modem_state(overview):
 
         if local_number > 0:
             modem["local_modem_number"] = local_number
+            modem["modem_number"] = local_number
             if int(modem.get("ordinal") or 0) <= 0:
                 modem["ordinal"] = local_number
 
@@ -851,6 +865,12 @@ def inject_local_runtime_state(overview):
                 break
 
     local_status = current_local_node_status()
+    if node_id:
+        for modem in overview.get("modems", []) or []:
+            if not isinstance(modem, dict):
+                continue
+            if str(modem.get("node_id") or "").strip() == node_id:
+                return finalize_overview_shape(overview)
     local_modem = detect_local_live_modem(node_id, registry_by_node_imei, by_stable_key, flashed)
 
     nodes = overview.setdefault("nodes", [])

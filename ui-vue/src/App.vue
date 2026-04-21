@@ -156,10 +156,20 @@ function storeDismissedFlashJobKey(value) {
 
 function currentFlashStorageKey(job) {
   if (!job || typeof job !== "object") return ""
-  const jobId = String(job.job_id || "").trim()
   const status = String(job.status || "").trim().toLowerCase()
-  if (!jobId || !status) return ""
-  return `${jobId}:${status}`
+  if (!status) return ""
+  const stableKey = String(job.stable_key || "").trim()
+  const imei = String(job.imei || "").trim()
+  const modemId = String(job.modem_id || "").trim()
+  const subject = stableKey || (imei ? `imei:${imei}` : "") || (modemId ? `modem:${modemId}` : "")
+  if (!subject) return ""
+  if (isTerminalFlashJob(job)) {
+    const message = String(job.message || "").trim()
+    return `${subject}:${status}:${message}`
+  }
+  const jobId = String(job.job_id || "").trim()
+  if (jobId) return `${subject}:${jobId}:${status}`
+  return `${subject}:${status}`
 }
 
 function isActiveFlashJob(job) {
@@ -284,8 +294,10 @@ function openFlashOverlay(label, status = "queued", stage = "queued", message = 
 }
 
 function closeFlashOverlay() {
-  if (flashNotice.value && isTerminalFlashJob(flashNotice.value)) {
-    storeDismissedFlashJobKey(currentFlashStorageKey(flashNotice.value))
+  const noticeKey = currentFlashStorageKey(flashNotice.value)
+  const overlayKey = String(flashOverlay.value.key || "").trim()
+  if (flashNotice.value && isTerminalFlashJob(flashNotice.value) && noticeKey && (!overlayKey || overlayKey === flashOverlayKeyForModem(flashJobTargetModem(flashNotice.value) || { node_id: flashNotice.value.node_id || "", id: flashNotice.value.modem_id || "", imei: flashNotice.value.imei || "" }))) {
+    storeDismissedFlashJobKey(noticeKey)
   }
   flashOverlay.value = { ...flashOverlay.value, open: false }
 }
@@ -298,6 +310,7 @@ function syncFlashOverlayFromOverview() {
     const nodeLabel = target?.node_id || flashJob.value.node_id || ""
     const label = `#${number} • ${idLabel}${nodeLabel ? ` • ${nodeLabel}` : ""}`
     if (isActiveFlashJob(flashJob.value)) {
+      storeDismissedFlashJobKey("")
       flashOverlay.value = {
         open: true,
         status: flashJob.value.status || "running",
@@ -311,6 +324,13 @@ function syncFlashOverlayFromOverview() {
     }
   }
   if (flashNotice.value && isTerminalFlashJob(flashNotice.value)) {
+    const target = flashJobTargetModem(flashNotice.value)
+    const noticeOverlayKey = flashOverlayKeyForModem(target || { node_id: flashNotice.value.node_id || "", id: flashNotice.value.modem_id || "", imei: flashNotice.value.imei || "" })
+    const activeOverlayStatus = String(flashOverlay.value.status || "").trim().toLowerCase()
+    const activeOverlayRunning = flashOverlay.value.open && !["completed", "done", "failed", "success"].includes(activeOverlayStatus)
+    if (activeOverlayRunning && flashOverlay.value.key && noticeOverlayKey && flashOverlay.value.key !== noticeOverlayKey) {
+      return
+    }
     const dismissedKey = loadDismissedFlashJobKey()
     const currentKey = currentFlashStorageKey(flashNotice.value)
     if (currentKey && currentKey === dismissedKey) {
@@ -319,7 +339,6 @@ function syncFlashOverlayFromOverview() {
       }
       return
     }
-    const target = flashJobTargetModem(flashNotice.value)
     const number = target ? localModemNumber(target) : (Number(flashNotice.value.ordinal || 0) || "?")
     const idLabel = target?.id || flashNotice.value.modem_id || "modem"
     const nodeLabel = target?.node_id || flashNotice.value.node_id || ""
@@ -329,7 +348,7 @@ function syncFlashOverlayFromOverview() {
       stage: "",
       message: flashOverlayBody(flashNotice.value.status, flashNotice.value.message),
       label: `#${number} • ${idLabel}${nodeLabel ? ` • ${nodeLabel}` : ""}`,
-      key: flashOverlayKeyForModem(target || { node_id: nodeLabel, id: idLabel, imei: flashNotice.value.imei || "" }),
+      key: noticeOverlayKey,
       startedAt: flashOverlay.value.startedAt || Date.now(),
     }
     return

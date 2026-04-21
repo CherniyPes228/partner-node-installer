@@ -19,11 +19,25 @@ NM_ONLY_UDEV_RULE="/run/udev/rules.d/99-partner-node-nm-only.rules"
 NM_ONLY_USB_PORT=""
 NM_ONLY_NET_IFACE=""
 ADB_STATE_DIR="${ADB_STATE_DIR:-/var/lib/partner-node/adb-home}"
+MODEM_ID=""
+ORDINAL=""
+BASE_URL=""
+IFACE=""
 if [[ "$(id -u)" -eq 0 ]]; then
   SUDO=()
 else
   SUDO=(sudo)
 fi
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --modem-id) MODEM_ID="${2:-}"; shift 2 ;;
+    --ordinal) ORDINAL="${2:-}"; shift 2 ;;
+    --base-url) BASE_URL="${2:-}"; shift 2 ;;
+    --iface) IFACE="${2:-}"; shift 2 ;;
+    *) shift ;;
+  esac
+done
 
 log() {
   printf '\n[%s] %s\n' "$(date +%H:%M:%S)" "$*"
@@ -82,6 +96,12 @@ wait_huawei_state() {
 bring_usbnet_up() {
   local iface
 
+  if [[ -n "${IFACE:-}" ]]; then
+    "${SUDO[@]}" ip addr flush dev "${IFACE}" 2>/dev/null || true
+    "${SUDO[@]}" ip link set "${IFACE}" up 2>/dev/null || true
+    return 0
+  fi
+
   for iface in /sys/class/net/*; do
     iface="$(basename "$iface")"
     [[ "$iface" =~ ^(enx|usb|eth) ]] || continue
@@ -105,7 +125,16 @@ recover_network() {
   bring_usbnet_up
   sleep 3
 
-  for iface in $(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|eth)' || true); do
+  local iface_list=()
+  if [[ -n "${IFACE:-}" ]]; then
+    iface_list=("${IFACE}")
+  else
+    while IFS= read -r iface; do
+      [[ -n "$iface" ]] && iface_list+=("$iface")
+    done < <(find /sys/class/net -maxdepth 1 -type l -printf '%f\n' | grep -E '^(enx|usb|eth)' || true)
+  fi
+
+  for iface in "${iface_list[@]}"; do
     "${SUDO[@]}" ip link set "$iface" up 2>/dev/null || true
     #sudo ip addr add 192.168.8.100/24 dev "$iface" 2>/dev/null || true
     #sudo ip addr add 192.168.1.100/24 dev "$iface" 2>/dev/null || true
@@ -147,16 +176,32 @@ ensure_hilink_mode() {
 wait_adb_on_hilink() {
   local timeout="${1:-40}"
   local i=0
+  local host=""
+  local hosts=()
 
   init_adb_env
+  if [[ -n "${BASE_URL:-}" ]]; then
+    host="$(hilink_host_from_base "${BASE_URL}")"
+    [[ -n "$host" ]] && hosts+=("$host")
+  fi
+  for host in 192.168.8.1 192.168.1.1; do
+    if [[ " ${hosts[*]} " != *" ${host} "* ]]; then
+      hosts+=("$host")
+    fi
+  done
   while (( i < timeout )); do
     bring_usbnet_up
-    timeout 5 adb connect 192.168.8.1:5555 >/dev/null 2>&1 || true
-    timeout 5 adb connect 192.168.1.1:5555 >/dev/null 2>&1 || true
+    for host in "${hosts[@]}"; do
+      timeout 5 adb connect "${host}:5555" >/dev/null 2>&1 || true
+    done
 
-    if timeout 5 adb devices | grep -qE '192\.168\.(8|1)\.1:5555'; then
-      return 0
-    fi
+    local devices=""
+    devices="$(timeout 5 adb devices 2>/dev/null || true)"
+    for host in "${hosts[@]}"; do
+      if grep -q "${host}:5555" <<<"$devices"; then
+        return 0
+      fi
+    done
 
     sleep 2
     ((i+=2))
@@ -183,7 +228,31 @@ extract_tag() {
   sed -n "s:.*<${tag}>\\(.*\\)</${tag}>.*:\\1:p" | head -n 1
 }
 
+curl_hilink() {
+  if [[ -n "${IFACE:-}" ]]; then
+    curl --interface "${IFACE}" "$@"
+  else
+    curl "$@"
+  fi
+}
+
+hilink_host_from_base() {
+  local base="${1:-}"
+  base="${base#http://}"
+  base="${base#https://}"
+  base="${base%%/*}"
+  base="${base%%:*}"
+  printf '%s' "${base}"
+}
+
 find_hilink_base() {
+  if [[ -n "${BASE_URL:-}" ]]; then
+    if curl_hilink -fsS --max-time 5 "${BASE_URL%/}/api/webserver/SesTokInfo" 2>/dev/null | grep -q "<TokInfo>"; then
+      printf '%s' "${BASE_URL%/}"
+      return 0
+    fi
+    return 1
+  fi
   local base=""
   local iface=""
   local addr=""
@@ -197,7 +266,7 @@ find_hilink_base() {
         [[ -n "$addr" ]] || continue
         base="http://${addr%.*}.1"
         if [[ " $seen " != *" $base "* ]]; then
-          if curl -fsS --max-time 5 "${base}/api/webserver/SesTokInfo" 2>/dev/null | grep -q "<TokInfo>"; then
+          if curl_hilink -fsS --max-time 5 "${base}/api/webserver/SesTokInfo" 2>/dev/null | grep -q "<TokInfo>"; then
             printf '%s' "$base"
             return 0
           fi
@@ -209,7 +278,7 @@ find_hilink_base() {
 
   for base in "http://192.168.8.1" "http://192.168.1.1"; do
     if [[ " $seen " != *" $base "* ]]; then
-      if curl -fsS --max-time 5 "${base}/api/webserver/SesTokInfo" 2>/dev/null | grep -q "<TokInfo>"; then
+      if curl_hilink -fsS --max-time 5 "${base}/api/webserver/SesTokInfo" 2>/dev/null | grep -q "<TokInfo>"; then
         printf '%s' "$base"
         return 0
       fi
@@ -222,13 +291,13 @@ find_hilink_base() {
 get_hilink_token() {
   local base="$1"
   local cookiejar="$2"
-  curl -fsS --max-time 10 -c "${cookiejar}" "${base}/api/webserver/SesTokInfo" 2>/dev/null | extract_tag "TokInfo"
+  curl_hilink -fsS --max-time 10 -c "${cookiejar}" "${base}/api/webserver/SesTokInfo" 2>/dev/null | extract_tag "TokInfo"
 }
 
 get_hilink_home_token() {
   local base="$1"
   local cookiejar="$2"
-  curl -fsS --max-time 10 -c "${cookiejar}" "${base}/html/home.html" 2>/dev/null | sed -n 's:.*<meta name="csrf_token" content="\([^"]*\)".*:\1:p' | head -n 1
+  curl_hilink -fsS --max-time 10 -c "${cookiejar}" "${base}/html/home.html" 2>/dev/null | sed -n 's:.*<meta name="csrf_token" content="\([^"]*\)".*:\1:p' | head -n 1
 }
 
 hilink_post_xml() {
@@ -247,7 +316,7 @@ hilink_post_xml() {
     return 1
   }
 
-  resp="$(curl -fsS --max-time 15 \
+  resp="$(curl_hilink -fsS --max-time 15 \
     -b "$cookiejar" -c "$cookiejar" \
     -H "Accept: */*" \
     -H "Origin: ${base}" \
@@ -272,13 +341,18 @@ enable_debug_mode() {
 
 godload_via_adb() {
   local attempt
+  local target_host=""
   init_adb_env
+  target_host="$(hilink_host_from_base "${BASE_URL:-}")"
   for attempt in 1 2 3 4 5; do
     log "ADB/GODLOAD попытка #$attempt"
     bring_usbnet_up
 
     if wait_adb_on_hilink 20; then
       adb shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+      if [[ -n "$target_host" ]]; then
+        adb -s "${target_host}:5555" shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
+      fi
       adb -s 192.168.8.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
       adb -s 192.168.1.1:5555 shell 'echo -e "AT^GODLOAD\r" >/dev/appvcom1' >/dev/null 2>&1 && return 0
     fi
@@ -334,6 +408,20 @@ choose_flash_port_hilink() {
 }
 
 find_huawei_usbdev() {
+  if [[ -n "${IFACE:-}" && -e "/sys/class/net/${IFACE}/device" ]]; then
+    local resolved=""
+    resolved="$(readlink -f "/sys/class/net/${IFACE}/device" 2>/dev/null || true)"
+    while [[ -n "$resolved" && "$resolved" != "/" && "$resolved" != "." ]]; do
+      if [[ -f "$resolved/idVendor" && "$(cat "$resolved/idVendor" 2>/dev/null)" == "12d1" ]]; then
+        basename "$resolved"
+        return 0
+      fi
+      local parent=""
+      parent="$(dirname "$resolved")"
+      [[ "$parent" == "$resolved" ]] && break
+      resolved="$parent"
+    done
+  fi
   local devpath
   for devpath in /sys/bus/usb/devices/*; do
     [[ -f "$devpath/idVendor" && -f "$devpath/idProduct" ]] || continue
@@ -346,6 +434,10 @@ find_huawei_usbdev() {
 }
 
 find_huawei_net_iface() {
+  if [[ -n "${IFACE:-}" ]]; then
+    printf '%s' "${IFACE}"
+    return 0
+  fi
   local iface
   for iface in /sys/class/net/*; do
     iface="$(basename "$iface")"
@@ -508,6 +600,10 @@ wait_post_flash_state() {
 }
 
 get_live_modem_iface() {
+  if [[ -n "${IFACE:-}" ]]; then
+    echo "${IFACE}"
+    return 0
+  fi
   local iface
 
   for iface in /sys/class/net/*; do
