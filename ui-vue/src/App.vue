@@ -64,6 +64,7 @@ const flashOverlay = ref({
   key: "",
   startedAt: 0,
 })
+const seenActiveFlashKeys = ref([])
 const speedTestTarget = ref("http://speedtest.tele2.net/1MB.zip")
 const speedTestCustomUrl = ref("")
 const speedTestTargets = [
@@ -294,6 +295,25 @@ function flashOverlayKeyForModem(modem) {
   return modem.imei || modem.id || ""
 }
 
+function rememberActiveFlashKey(key) {
+  const normalized = String(key || "").trim()
+  if (!normalized) return
+  if (!seenActiveFlashKeys.value.includes(normalized)) {
+    seenActiveFlashKeys.value = [...seenActiveFlashKeys.value, normalized]
+  }
+}
+
+function forgetActiveFlashKey(key) {
+  const normalized = String(key || "").trim()
+  if (!normalized) return
+  seenActiveFlashKeys.value = seenActiveFlashKeys.value.filter((item) => item !== normalized)
+}
+
+function hasSeenActiveFlashKey(key) {
+  const normalized = String(key || "").trim()
+  return normalized ? seenActiveFlashKeys.value.includes(normalized) : false
+}
+
 function modemForOverlayKey(key) {
   const normalized = String(key || "").trim()
   if (!normalized) return null
@@ -333,6 +353,7 @@ function closeFlashOverlay() {
   if (flashNotice.value && isTerminalFlashJob(flashNotice.value) && noticeKey && (!overlayKey || overlayKey === flashOverlayKeyForModem(flashJobTargetModem(flashNotice.value) || { node_id: flashNotice.value.node_id || "", id: flashNotice.value.modem_id || "", imei: flashNotice.value.imei || "" }))) {
     storeDismissedFlashJobKey(noticeKey)
   }
+  forgetActiveFlashKey(overlayKey)
   flashOverlay.value = { ...flashOverlay.value, open: false }
 }
 
@@ -352,6 +373,8 @@ function syncFlashOverlayFromOverview() {
     const nodeLabel = target?.node_id || flashJob.value.node_id || ""
     const label = `#${number} • ${idLabel}${nodeLabel ? ` • ${nodeLabel}` : ""}`
     if (isActiveFlashJob(flashJob.value)) {
+      const activeKey = flashOverlayKeyForModem(target || { node_id: nodeLabel, id: idLabel, imei: flashJob.value.imei || "" })
+      rememberActiveFlashKey(activeKey)
       storeDismissedFlashJobKey("")
       flashOverlay.value = {
         open: true,
@@ -359,20 +382,39 @@ function syncFlashOverlayFromOverview() {
         stage: flashJob.value.stage || flashJob.value.status || "running",
         message: flashOverlayBody(flashJob.value.status, flashJob.value.message),
         label,
-        key: flashOverlayKeyForModem(target || { node_id: nodeLabel, id: idLabel, imei: flashJob.value.imei || "" }),
+        key: activeKey,
         startedAt: flashOverlay.value.startedAt || Date.now(),
       }
       return
     }
   }
 
+  if (!hasActiveJob && activeRunningModem && activeRunningKey) {
+    rememberActiveFlashKey(activeRunningKey)
+    storeDismissedFlashJobKey("")
+    flashOverlay.value = {
+      open: true,
+      status: activeRunningModem.flash_status || "running",
+      stage: activeRunningModem.flash_stage || activeRunningModem.flash_status || "running",
+      message: flashOverlayBody(activeRunningModem.flash_status, activeRunningModem.flash_message || ""),
+      label: `#${localModemNumber(activeRunningModem)} • ${activeRunningModem.id}${activeRunningModem.node_id ? ` • ${activeRunningModem.node_id}` : ""}`,
+      key: activeRunningKey,
+      startedAt: flashOverlay.value.startedAt || Date.now(),
+    }
+    return
+  }
+
   if (activeOverlayRunning && !hasActiveJob && overlayKey && !pinnedRunningOverlay) {
+    rememberActiveFlashKey(overlayKey)
     flashOverlay.value = { ...flashOverlay.value, open: false }
   }
 
   if (flashNotice.value && isTerminalFlashJob(flashNotice.value)) {
     const target = flashJobTargetModem(flashNotice.value)
     const noticeOverlayKey = flashOverlayKeyForModem(target || { node_id: flashNotice.value.node_id || "", id: flashNotice.value.modem_id || "", imei: flashNotice.value.imei || "" })
+    if (!hasSeenActiveFlashKey(noticeOverlayKey) && (!overlayKey || overlayKey !== noticeOverlayKey)) {
+      return
+    }
     if (pinnedRunningOverlay && overlayKey && noticeOverlayKey && overlayKey !== noticeOverlayKey) {
       return
     }
@@ -406,6 +448,7 @@ function syncFlashOverlayFromOverview() {
       key: noticeOverlayKey,
       startedAt: flashOverlay.value.startedAt || Date.now(),
     }
+    forgetActiveFlashKey(noticeOverlayKey)
     return
   }
   if (flashOverlay.value.open && flashOverlay.value.key) {
@@ -714,7 +757,9 @@ async function flashRegistryModem(item) {
   registrySaving.value = (item.node_id && item.imei) ? `${item.node_id}:${item.imei}` : (item.imei || `${item.last_seen_node_id}:${item.last_seen_modem_id}`)
   registryMessage.value = ""
   try {
-    openFlashOverlay(`Modem #${item.modem_number || "?"}${item.last_seen_modem_id ? ` • ${item.last_seen_modem_id}` : ""}`, "queued", "queued", flashOverlayBody("running", ""), `${item.last_seen_node_id || item.node_id || ""}:${item.last_seen_modem_id || ""}`)
+    const overlayKey = `${item.last_seen_node_id || item.node_id || ""}:${item.last_seen_modem_id || ""}`
+    rememberActiveFlashKey(overlayKey)
+    openFlashOverlay(`Modem #${item.modem_number || "?"}${item.last_seen_modem_id ? ` • ${item.last_seen_modem_id}` : ""}`, "queued", "queued", flashOverlayBody("running", ""), overlayKey)
     const response = await fetch("/api/command", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -751,7 +796,9 @@ async function flashLiveModem(modem) {
   registrySaving.value = key
   registryMessage.value = ""
   try {
-    openFlashOverlay(`#${localModemNumber(modem)} • ${modem.id}${modem.node_id ? ` • ${modem.node_id}` : ""}`, "queued", "queued", flashOverlayBody("running", ""), flashOverlayKeyForModem(modem))
+    const overlayKey = flashOverlayKeyForModem(modem)
+    rememberActiveFlashKey(overlayKey)
+    openFlashOverlay(`#${localModemNumber(modem)} • ${modem.id}${modem.node_id ? ` • ${modem.node_id}` : ""}`, "queued", "queued", flashOverlayBody("running", ""), overlayKey)
     const response = await fetch("/api/command", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
