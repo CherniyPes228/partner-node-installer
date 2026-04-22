@@ -31,6 +31,7 @@ curl -fsSL "${UI_ASSET_BASE}/assets/partner-node-ui.css" -o "${UI_DIR}/assets/pa
 
 cat > "${UI_DIR}/server.py" <<'PY'
 #!/usr/bin/env python3
+import copy
 import json
 import mimetypes
 import os
@@ -72,7 +73,9 @@ TARGET_WEBUI_VERSION = "17.100.13.113.03"
 TARGET_WEBUI_LABEL = "17.100.13.01.03"
 MAIN_SERVER_TIMEOUT = float(os.environ.get("PARTNER_MAIN_SERVER_TIMEOUT", "5"))
 HILINK_PROBE_TIMEOUT = float(os.environ.get("PARTNER_HILINK_PROBE_TIMEOUT", "1.5"))
+HILINK_INFO_CACHE_TTL = float(os.environ.get("PARTNER_HILINK_INFO_CACHE_TTL", "5"))
 OVERVIEW_CACHE_TTL = float(os.environ.get("PARTNER_OVERVIEW_CACHE_TTL", "3"))
+LOCAL_HILINK_IFACE_PREFIXES = ("enx", "enp", "usb", "wwan", "eth")
 
 ALLOWED = {
     "self_check",
@@ -85,6 +88,7 @@ ALLOWED = {
 }
 
 OVERVIEW_CACHE_LOCK = threading.Lock()
+HILINK_INFO_CACHE_LOCK = threading.Lock()
 OVERVIEW_CACHE = {
     "data": {
         "partner_key": PARTNER_KEY,
@@ -97,6 +101,8 @@ OVERVIEW_CACHE = {
     "refreshing": False,
     "error": "",
 }
+HILINK_INFO_CACHE = {}
+LAST_ALIAS_SIGNATURE = ""
 
 
 def ui_log(message, **fields):
@@ -466,26 +472,9 @@ def current_local_node_status():
     return "online" if local_service_active("partner-node") else "offline"
 
 
-def local_hilink_base_candidates():
-    candidates = []
+def local_ipv4_interfaces():
+    interfaces = []
     seen = set()
-
-    def add(url):
-        url = str(url or "").strip().rstrip("/")
-        if not url or url in seen:
-            return
-        seen.add(url)
-        candidates.append(url)
-
-    try:
-        with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
-            content = fh.read()
-        match = re.search(r'(?m)^\s*base_url:\s*"?(http://[0-9.]+(?::\d+)?)"?\s*$', content)
-        if match:
-            add(match.group(1))
-    except Exception:
-        pass
-
     try:
         ip_out = subprocess.run(
             ["ip", "-o", "-4", "addr", "show"],
@@ -500,24 +489,66 @@ def local_hilink_base_candidates():
             parts = line.split()
             if len(parts) < 4:
                 continue
-            name = parts[1]
-            cidr = parts[3]
+            name = str(parts[1] or "").strip()
+            cidr = str(parts[3] or "").strip()
             ip = cidr.split("/", 1)[0].strip()
-            if not name.startswith(("enx", "enp", "usb")):
+            if not name.startswith(LOCAL_HILINK_IFACE_PREFIXES):
                 continue
             octets = ip.split(".")
             if len(octets) != 4 or octets[0] != "192" or octets[1] != "168":
                 continue
-            add(f"http://{octets[0]}.{octets[1]}.{octets[2]}.1")
+            key = (name, ip)
+            if key in seen:
+                continue
+            seen.add(key)
+            interfaces.append({
+                "name": name,
+                "ip": ip,
+                "base_url": f"http://{octets[0]}.{octets[1]}.{octets[2]}.1",
+            })
+    except Exception:
+        pass
+    return interfaces
+
+
+def local_hilink_runtime_candidates():
+    candidates = []
+    seen = set()
+
+    def add(base_url, interface_name="", interface_ip=""):
+        base_url = str(base_url or "").strip().rstrip("/")
+        if not base_url or base_url in seen:
+            return
+        seen.add(base_url)
+        candidates.append({
+            "base_url": base_url,
+            "local_interface": str(interface_name or "").strip(),
+            "local_ip": str(interface_ip or "").strip(),
+        })
+
+    for iface in local_ipv4_interfaces():
+        add(iface.get("base_url"), iface.get("name"), iface.get("ip"))
+
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as fh:
+            content = fh.read()
+        match = re.search(r'(?m)^\s*base_url:\s*"?(http://[0-9.]+(?::\d+)?)"?\s*$', content)
+        if match:
+            add(match.group(1))
     except Exception:
         pass
 
     for host in ("192.168.8.1", "192.168.1.1", "192.168.13.1", "192.168.3.1", "192.168.123.1"):
         add(f"http://{host}")
+
     return candidates
 
 
-def detect_local_huawei_hilink_placeholder():
+def local_hilink_base_candidates():
+    return [item.get("base_url", "") for item in local_hilink_runtime_candidates()]
+
+
+def detect_local_huawei_hilink_placeholders():
     recognized_products = ("14dc", "14db", "1505", "1506")
     product_id = ""
     try:
@@ -533,46 +564,53 @@ def detect_local_huawei_hilink_placeholder():
                 product_id = candidate
                 break
         if not product_id:
-            return None
+            return []
     except Exception:
-        return None
+        return []
 
-    iface_name = ""
-    iface_ip = ""
-    try:
-        ip_out = subprocess.run(
-            ["ip", "-o", "-4", "addr", "show"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        iface_name = ""
-        iface_ip = ""
-        for line in (ip_out.stdout or "").splitlines():
-            line = line.strip()
-            if not line or not line[0].isdigit():
-                continue
-            parts = line.split()
-            if len(parts) < 4:
-                continue
-            name = parts[1]
-            cidr = parts[3]
-            ip = cidr.split("/", 1)[0].strip()
-            if not name.startswith(("enx", "enp", "usb")):
-                continue
-            octets = ip.split(".")
-            if len(octets) == 4 and octets[0] == "192" and octets[1] == "168":
-                iface_name = name
-                iface_ip = ip
-                break
-    except Exception:
-        pass
+    placeholders = []
+    runtime_candidates = local_hilink_runtime_candidates()
+    for candidate in runtime_candidates:
+        iface_name = str(candidate.get("local_interface") or "").strip()
+        iface_ip = str(candidate.get("local_ip") or "").strip()
+        base_url = str(candidate.get("base_url") or "").strip().rstrip("/")
+        modem_id = f"hilink-{iface_name}" if iface_name else "hilink0"
+        placeholders.append({
+            "id": modem_id,
+            "ordinal": 0,
+            "modem_number": 0,
+            "usb_vendor_id": "12d1",
+            "usb_product_id": product_id,
+            "usb_mode": "hilink",
+            "state": "detected",
+            "wan_ip": "",
+            "signal_strength": 0,
+            "operator": "",
+            "technology": "",
+            "active_sessions": 0,
+            "port": 0,
+            "client_eligible": True,
+            "traffic_bytes_in": 0,
+            "traffic_bytes_out": 0,
+            "flash_status": "",
+            "flash_stage": "",
+            "flash_message": "",
+            "provision_status": "requires_flash",
+            "provision_notes": "huawei hilink modem detected; waiting for webui",
+            "device_name": "E3372",
+            "hardware_version": "",
+            "software_version": "",
+            "webui_version": "",
+            "product_family": "LTE",
+            "local_base_url": base_url,
+            "local_interface": iface_name,
+            "local_ip": iface_ip,
+        })
 
-    base_url = ""
-    octets = iface_ip.split(".")
-    if len(octets) == 4 and octets[0] == "192" and octets[1] == "168":
-        base_url = f"http://{octets[0]}.{octets[1]}.{octets[2]}.1"
-    return {
+    if placeholders:
+        return placeholders
+
+    return [{
         "id": "hilink0",
         "ordinal": 0,
         "modem_number": 0,
@@ -585,7 +623,7 @@ def detect_local_huawei_hilink_placeholder():
         "operator": "",
         "technology": "",
         "active_sessions": 0,
-        "port": 31001,
+        "port": 0,
         "client_eligible": True,
         "traffic_bytes_in": 0,
         "traffic_bytes_out": 0,
@@ -599,29 +637,42 @@ def detect_local_huawei_hilink_placeholder():
         "software_version": "",
         "webui_version": "",
         "product_family": "LTE",
-        "local_base_url": base_url,
-        "local_interface": iface_name,
-    }
+        "local_base_url": "",
+        "local_interface": "",
+        "local_ip": "",
+    }]
 
 
-def detect_local_live_modem(node_id, registry_by_node_imei, by_stable_key, flashed):
-    for base_url in local_hilink_base_candidates():
+def detect_local_live_modems(node_id, registry_by_node_imei, by_stable_key, flashed):
+    modems = []
+    seen = set()
+    for candidate in local_hilink_runtime_candidates():
+        base_url = str(candidate.get("base_url") or "").strip().rstrip("/")
         info = read_hilink_device_info(base_url)
         if not info:
             continue
 
+        iface_name = str(candidate.get("local_interface") or info.get("local_interface") or "").strip()
+        iface_ip = str(candidate.get("local_ip") or info.get("local_ip") or "").strip()
+        modem_id = f"hilink-{iface_name}" if iface_name else "hilink0"
         imei = normalize_digits(info.get("imei"))
         stable_key = f"imei:{imei}" if imei else ""
+        dedupe_key = f"{node_id}:{imei or modem_id}:{base_url}"
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
         registry_item = registry_by_node_imei.get(f"{node_id}:{imei}") if node_id and imei else None
         local_number = int(by_stable_key.get(stable_key) or 0) if stable_key else 0
         local_flashed = bool(flashed.get(stable_key)) if stable_key else False
+        modem_number = int(registry_item.get("modem_number") or 0) if registry_item else local_number
         provision_status = "ready" if local_flashed else "requires_flash"
         provision_notes = "known modem for this node" if local_flashed or local_number > 0 else "new modem for this node"
 
         modem = {
-            "id": "hilink0",
-            "ordinal": 0,
-            "modem_number": int(registry_item.get("modem_number") or 0) if registry_item else local_number,
+            "id": modem_id,
+            "ordinal": modem_number if modem_number > 0 else 0,
+            "modem_number": modem_number,
             "local_modem_number": local_number,
             "known_to_node": bool(local_number > 0),
             "local_flashed": local_flashed,
@@ -636,7 +687,7 @@ def detect_local_live_modem(node_id, registry_by_node_imei, by_stable_key, flash
             "operator": "",
             "technology": "",
             "active_sessions": 0,
-            "port": 31001,
+            "port": (31000 + modem_number) if modem_number > 0 else 0,
             "client_eligible": True,
             "traffic_bytes_in": 0,
             "traffic_bytes_out": 0,
@@ -646,27 +697,36 @@ def detect_local_live_modem(node_id, registry_by_node_imei, by_stable_key, flash
             "provision_status": provision_status,
             "provision_notes": provision_notes,
             "last_seen_node_id": node_id,
-            "last_seen_modem_id": "hilink0",
+            "last_seen_modem_id": modem_id,
+            "local_base_url": base_url,
+            "local_interface": iface_name,
+            "local_ip": iface_ip,
         }
         modem.update(info)
-        return modem
-    placeholder = detect_local_huawei_hilink_placeholder()
-    if not placeholder:
-        return None
-    ui_log(
-        "local hilink placeholder detected",
-        node_id=node_id or "",
-        usb_product=placeholder.get("usb_product_id", ""),
-        local_interface=placeholder.get("local_interface", ""),
-        local_base_url=placeholder.get("local_base_url", ""),
-    )
-    placeholder["node_id"] = node_id
-    placeholder["node_status"] = current_local_node_status()
-    placeholder["last_seen_node_id"] = node_id
-    placeholder["last_seen_modem_id"] = "hilink0"
-    placeholder["known_to_node"] = False
-    placeholder["local_flashed"] = False
-    return placeholder
+        if iface_name:
+            modem["id"] = modem_id
+            modem["last_seen_modem_id"] = modem_id
+        modems.append(modem)
+
+    if modems:
+        return modems
+
+    placeholders = detect_local_huawei_hilink_placeholders()
+    for placeholder in placeholders:
+        ui_log(
+            "local hilink placeholder detected",
+            node_id=node_id or "",
+            usb_product=placeholder.get("usb_product_id", ""),
+            local_interface=placeholder.get("local_interface", ""),
+            local_base_url=placeholder.get("local_base_url", ""),
+        )
+        placeholder["node_id"] = node_id
+        placeholder["node_status"] = current_local_node_status()
+        placeholder["last_seen_node_id"] = node_id
+        placeholder["last_seen_modem_id"] = placeholder.get("id") or "hilink0"
+        placeholder["known_to_node"] = False
+        placeholder["local_flashed"] = False
+    return placeholders
 
 
 def finalize_overview_shape(overview):
@@ -814,6 +874,12 @@ def read_hilink_device_info(base_url):
     base_url = str(base_url or "").strip().rstrip("/")
     if not base_url:
         return None
+    now = time.time()
+    with HILINK_INFO_CACHE_LOCK:
+        cached = HILINK_INFO_CACHE.get(base_url)
+        if cached and (now - float(cached.get("ts") or 0.0)) <= HILINK_INFO_CACHE_TTL:
+            data = cached.get("data")
+            return copy.deepcopy(data) if isinstance(data, dict) else None
     try:
         ses = subprocess.run(
             ["curl", "-fsS", "--max-time", str(HILINK_PROBE_TIMEOUT), f"{base_url}/api/webserver/SesTokInfo"],
@@ -859,9 +925,12 @@ def read_hilink_device_info(base_url):
             if match:
                 fields[key] = match.group(1).strip()
         fields["local_base_url"] = base_url
-        return fields if fields else None
+        result = fields if fields else None
     except Exception:
-        return None
+        result = None
+    with HILINK_INFO_CACHE_LOCK:
+        HILINK_INFO_CACHE[base_url] = {"ts": now, "data": copy.deepcopy(result) if isinstance(result, dict) else None}
+    return result
 
 
 def enrich_overview_with_local_modem_state(overview):
@@ -951,13 +1020,13 @@ def enrich_overview_with_local_modem_state(overview):
     overview["modems"] = top_level
 
     modem_map = {}
-    active_registry_keys = set()
+    modem_map_by_imei = {}
     for modem in top_level:
         if isinstance(modem, dict):
             modem_map[f"{modem.get('node_id','')}:{modem.get('id','')}"] = modem
             imei = normalize_digits(modem.get("imei"))
             if imei:
-                active_registry_keys.add(f"{modem.get('node_id','')}:{imei}")
+                modem_map_by_imei[f"{modem.get('node_id','')}:{imei}"] = modem
 
     for node in overview.get("nodes", []) or []:
         if not isinstance(node, dict):
@@ -965,8 +1034,13 @@ def enrich_overview_with_local_modem_state(overview):
         enriched = []
         node_id = str(node.get("node_id") or "")
         for modem in node.get("modems", []) or []:
+            imei_key = f"{node_id}:{normalize_digits(modem.get('imei'))}" if isinstance(modem, dict) and normalize_digits(modem.get("imei")) else ""
             key = f"{node_id}:{modem.get('id','')}" if isinstance(modem, dict) else ""
-            if key and key in modem_map:
+            if imei_key and imei_key in modem_map_by_imei:
+                merged = dict(modem)
+                merged.update(modem_map_by_imei[imei_key])
+                enriched.append(merged)
+            elif key and key in modem_map:
                 merged = dict(modem)
                 merged.update(modem_map[key])
                 enriched.append(merged)
@@ -1000,13 +1074,7 @@ def inject_local_runtime_state(overview):
                 break
 
     local_status = current_local_node_status()
-    if node_id:
-        for modem in overview.get("modems", []) or []:
-            if not isinstance(modem, dict):
-                continue
-            if str(modem.get("node_id") or "").strip() == node_id:
-                return finalize_overview_shape(overview)
-    local_modem = detect_local_live_modem(node_id, registry_by_node_imei, by_stable_key, flashed)
+    local_modems = detect_local_live_modems(node_id, registry_by_node_imei, by_stable_key, flashed)
 
     nodes = overview.setdefault("nodes", [])
     modems = overview.setdefault("modems", [])
@@ -1036,12 +1104,13 @@ def inject_local_runtime_state(overview):
         if local_status == "online":
             overview["last_heartbeat_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-    if not local_modem:
+    if not local_modems:
         return finalize_overview_shape(overview)
 
     if not node_id:
-        node_id = str(local_modem.get("node_id") or overview.get("node_id") or "local-node").strip()
-        local_modem["node_id"] = node_id
+        node_id = str(local_modems[0].get("node_id") or overview.get("node_id") or "local-node").strip()
+        for local_modem in local_modems:
+            local_modem["node_id"] = node_id
         node_entry = {
             "node_id": node_id,
             "node_status": local_status,
@@ -1057,61 +1126,73 @@ def inject_local_runtime_state(overview):
         overview["node_id"] = node_id
         overview["node_status"] = local_status
 
-    active_key = f"{node_id}:{normalize_digits(local_modem.get('imei')) or local_modem.get('id')}"
-    local_imei = normalize_digits(local_modem.get("imei"))
-    local_id = str(local_modem.get("id") or "").strip()
-
-    def same_modem(item):
+    def same_modem(item, local_modem):
         if not isinstance(item, dict):
             return False
         item_node = str(item.get("node_id") or "").strip()
+        local_imei = normalize_digits(local_modem.get("imei"))
         item_imei = normalize_digits(item.get("imei"))
+        local_id = str(local_modem.get("id") or "").strip()
         item_id = str(item.get("id") or "").strip()
+        local_base = str(local_modem.get("local_base_url") or "").strip().rstrip("/")
+        item_base = str(item.get("local_base_url") or "").strip().rstrip("/")
         if item_node != node_id:
             return False
         if local_imei and item_imei:
             return local_imei == item_imei
+        if local_base and item_base and local_base == item_base:
+            return True
         if local_id and item_id and local_id == item_id:
             return True
-        return active_key == f"{item_node}:{item_imei or item_id}"
-
-    merged = False
-    for idx, item in enumerate(modems):
-        if same_modem(item):
-            updated = dict(item)
-            updated.update(local_modem)
-            modems[idx] = updated
-            local_modem = updated
-            merged = True
-            break
-    if not merged:
-        modems.append(local_modem)
+        return False
 
     node_modems = node_entry.setdefault("modems", [])
-    merged = False
-    for idx, item in enumerate(node_modems):
-        if same_modem(item):
-            updated = dict(item)
-            updated.update(local_modem)
-            node_modems[idx] = updated
-            merged = True
-            break
-    if not merged:
-        node_modems.append(local_modem)
+    for local_modem in local_modems:
+        merged = False
+        for idx, item in enumerate(modems):
+            if same_modem(item, local_modem):
+                updated = dict(item)
+                updated.update(local_modem)
+                modems[idx] = updated
+                local_modem = updated
+                merged = True
+                break
+        if not merged:
+            modems.append(local_modem)
+
+        merged = False
+        for idx, item in enumerate(node_modems):
+            if same_modem(item, local_modem):
+                updated = dict(item)
+                updated.update(local_modem)
+                node_modems[idx] = updated
+                merged = True
+                break
+        if not merged:
+            node_modems.append(local_modem)
 
     return finalize_overview_shape(overview)
 
 
 def reconcile_aliases(overview):
-    ensure_alias_redirect()
     if not isinstance(overview, dict):
         return
+    global LAST_ALIAS_SIGNATURE
+    alias_hosts = []
     for modem in overview.get("modems", []) or []:
         if not isinstance(modem, dict):
             continue
         alias_host = alias_host_for_ordinal(modem.get("ordinal") or modem.get("modem_number"))
         if alias_host:
-            ensure_alias_ip(alias_host)
+            alias_hosts.append(alias_host)
+    alias_hosts = sorted(set(alias_hosts))
+    signature = "|".join(alias_hosts)
+    if signature == LAST_ALIAS_SIGNATURE:
+        return
+    ensure_alias_redirect()
+    for alias_host in alias_hosts:
+        ensure_alias_ip(alias_host)
+    LAST_ALIAS_SIGNATURE = signature
 
 
 def read_flash_settings():
@@ -1148,7 +1229,7 @@ def write_flash_settings(auto_enabled):
 def fetch_overview():
     now = time.time()
     with OVERVIEW_CACHE_LOCK:
-        cached = dict(OVERVIEW_CACHE["data"]) if isinstance(OVERVIEW_CACHE["data"], dict) else {
+        cached = copy.deepcopy(OVERVIEW_CACHE["data"]) if isinstance(OVERVIEW_CACHE["data"], dict) else {
             "partner_key": PARTNER_KEY,
             "main_server": MAIN_SERVER,
             "nodes": [],
@@ -1158,13 +1239,6 @@ def fetch_overview():
         updated_at = float(OVERVIEW_CACHE.get("updated_at") or 0.0)
         refreshing = bool(OVERVIEW_CACHE.get("refreshing"))
     if isinstance(cached, dict):
-        try:
-            enrich_overview_with_local_modem_state(cached)
-            inject_local_runtime_state(cached)
-            apply_local_flash_job(cached)
-            reconcile_aliases(cached)
-        except Exception:
-            pass
         cached = finalize_overview_shape(cached)
     if now - updated_at <= OVERVIEW_CACHE_TTL and cached:
         ui_log("overview cache hit", updated_at=int(updated_at), modem_count=len(cached.get("modems", []) or []))

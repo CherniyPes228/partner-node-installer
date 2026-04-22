@@ -40,6 +40,7 @@ const extraParams = ref("")
 const selectedNode = ref("all")
 const selectedModem = ref("all")
 const modemFleetScope = ref("current_node")
+const activeTab = ref("nodes")
 const eventFeed = ref([])
 const localSpeedTest = ref(null)
 const localSpeedTestLoading = ref(false)
@@ -84,6 +85,9 @@ let reconnectTimer = null
 let refreshTimer = null
 let fallbackTimer = null
 let localOverviewTimer = null
+let billingTimer = null
+let overviewRequestInFlight = false
+let billingRequestInFlight = false
 
 const commandOptions = [
   { value: "self_check", label: "Self Check", note: "Checks node-agent, proxy, heartbeat, and modem inventory." },
@@ -111,9 +115,13 @@ const commandHistory = computed(() => Array.isArray(overview.value?.last_results
 const partnerBalance = computed(() => overview.value?.partner_balance || {})
 const flashJob = computed(() => (overview.value && typeof overview.value.flash_job === "object" && overview.value.flash_job) ? overview.value.flash_job : null)
 const flashNotice = computed(() => (overview.value && typeof overview.value.flash_notice === "object" && overview.value.flash_notice) ? overview.value.flash_notice : null)
-const billingByKey = computed(() => {
+const billingBySlot = computed(() => {
   const map = {}
-  for (const item of modemBilling.value) map[`${item.node_id}:${item.modem_id}`] = item
+  for (const item of modemBilling.value) {
+    const nodeId = String(item?.node_id || "").trim()
+    const slot = Number(item?.modem_ordinal || 0)
+    if (nodeId && Number.isFinite(slot) && slot > 0) map[`${nodeId}:${slot}`] = item
+  }
   return map
 })
 const registryByIMEI = computed(() => {
@@ -127,6 +135,15 @@ const registryByModemKey = computed(() => {
   const map = {}
   for (const item of modemRegistry.value) {
     if (item.last_seen_node_id && item.last_seen_modem_id) map[`${item.last_seen_node_id}:${item.last_seen_modem_id}`] = item
+  }
+  return map
+})
+const registryBySlot = computed(() => {
+  const map = {}
+  for (const item of modemRegistry.value) {
+    const nodeId = String(item?.node_id || item?.last_seen_node_id || "").trim()
+    const slot = Number(item?.modem_number || 0)
+    if (nodeId && Number.isFinite(slot) && slot > 0) map[`${nodeId}:${slot}`] = item
   }
   return map
 })
@@ -333,6 +350,52 @@ function localModemNumber(modem) {
   const mappedNumber = Number(mapped?.modem_number || 0)
   if (Number.isFinite(mappedNumber) && mappedNumber > 0) return mappedNumber
   return "?"
+}
+
+function registryItemForModem(modem) {
+  if (!modem) return null
+  const nodeId = String(modem.node_id || "").trim()
+  const imei = normalizeDigits(modem.imei)
+  if (nodeId && imei && registryByIMEI.value[`${nodeId}:${imei}`]) return registryByIMEI.value[`${nodeId}:${imei}`]
+  const slot = Number(localModemNumber(modem) || 0)
+  if (nodeId && Number.isFinite(slot) && slot > 0) return registryBySlot.value[`${nodeId}:${slot}`] || null
+  const modemId = String(modem.id || "").trim()
+  if (nodeId && modemId) return registryByModemKey.value[`${nodeId}:${modemId}`] || null
+  return null
+}
+
+function billingItemForModem(modem) {
+  if (!modem) return null
+  const nodeId = String(modem.node_id || "").trim()
+  const slot = Number(localModemNumber(modem) || modem.ordinal || modem.modem_number || 0)
+  if (nodeId && Number.isFinite(slot) && slot > 0) return billingBySlot.value[`${nodeId}:${slot}`] || null
+  return null
+}
+
+function registryItemForBillingItem(item) {
+  if (!item) return null
+  const nodeId = String(item.node_id || "").trim()
+  const slot = Number(item.modem_ordinal || 0)
+  if (nodeId && Number.isFinite(slot) && slot > 0) return registryBySlot.value[`${nodeId}:${slot}`] || null
+  const modemId = String(item.modem_id || "").trim()
+  if (nodeId && modemId) return registryByModemKey.value[`${nodeId}:${modemId}`] || null
+  return null
+}
+
+function liveModemForRegistryItem(item) {
+  if (!item) return null
+  const nodeId = String(item.node_id || item.last_seen_node_id || "").trim()
+  const imei = normalizeDigits(item.imei)
+  if (nodeId && imei) {
+    const byImei = modems.value.find((modem) => String(modem?.node_id || "").trim() === nodeId && normalizeDigits(modem?.imei) === imei)
+    if (byImei) return byImei
+  }
+  const slot = Number(item.modem_number || 0)
+  if (nodeId && Number.isFinite(slot) && slot > 0) {
+    const bySlot = modems.value.find((modem) => String(modem?.node_id || "").trim() === nodeId && Number(localModemNumber(modem) || 0) === slot)
+    if (bySlot) return bySlot
+  }
+  return null
 }
 
 function registryFleetRowKey(item) {
@@ -690,7 +753,7 @@ function pushEvent(type, payload = {}) {
 
 function clearReconnect() { if (reconnectTimer) { window.clearTimeout(reconnectTimer); reconnectTimer = null } }
 function clearRefreshTimer() { if (refreshTimer) { window.clearTimeout(refreshTimer); refreshTimer = null } }
-function scheduleRefresh(delay = 250) { clearRefreshTimer(); refreshTimer = window.setTimeout(() => loadOverview(false), delay) }
+function scheduleRefresh(delay = 400) { clearRefreshTimer(); refreshTimer = window.setTimeout(() => loadOverview(false), delay) }
 
 function closeRealtime() {
   clearReconnect()
@@ -719,12 +782,14 @@ function connectRealtime() {
   closeRealtime(); wsUrl = nextUrl; realtimeState.value = "connecting"; realtimeNote.value = "Connecting websocket to the main server..."
   ws = new WebSocket(nextUrl)
   ws.onopen = () => { realtimeState.value = "active"; realtimeNote.value = "Live channel is active, the screen updates from events."; pushEvent("realtime.connected", { partner_key: overview.value?.partner_key || "" }) }
-  ws.onmessage = (event) => { try { const data = JSON.parse(event.data); pushEvent(data.type || "event", data.payload || {}) } catch { pushEvent("event.raw", { text: String(event.data || "") }) } scheduleRefresh(120) }
+  ws.onmessage = (event) => { try { const data = JSON.parse(event.data); pushEvent(data.type || "event", data.payload || {}) } catch { pushEvent("event.raw", { text: String(event.data || "") }) } scheduleRefresh(400) }
   ws.onerror = () => { realtimeState.value = "warning"; realtimeNote.value = "Realtime channel reported an error, waiting to reconnect." }
   ws.onclose = () => { ws = null; realtimeState.value = "fallback"; realtimeNote.value = "Realtime channel is reconnecting; local polling stays active."; clearReconnect(); reconnectTimer = window.setTimeout(() => connectRealtime(), 2500) }
 }
 
 async function loadOverview(showLoader = true) {
+  if (overviewRequestInFlight) return
+  overviewRequestInFlight = true
   if (showLoader) loading.value = true
   refreshError.value = ""
   try {
@@ -733,7 +798,6 @@ async function loadOverview(showLoader = true) {
     const data = await response.json()
     overview.value = data
     modemRegistry.value = Array.isArray(data.modem_registry) ? data.modem_registry : []
-    await loadModemBilling()
     if (selectedNode.value === "all" && data.nodes?.length === 1) selectedNode.value = data.nodes[0].node_id
     if (selectedNode.value !== "all" && !data.nodes?.some((item) => item.node_id === selectedNode.value)) selectedNode.value = data.nodes?.[0]?.node_id || "all"
     if (selectedModem.value !== "all" && !filteredModems.value.some((item) => item.id === selectedModem.value)) selectedModem.value = "all"
@@ -744,7 +808,10 @@ async function loadOverview(showLoader = true) {
       realtimeState.value = "fallback"
       realtimeNote.value = "Local overview request failed, retrying with periodic polling."
     }
-  } finally { loading.value = false }
+  } finally {
+    overviewRequestInFlight = false
+    loading.value = false
+  }
 }
 
 async function updateModemRegistry(modem, provisionStatus) {
@@ -774,6 +841,8 @@ async function updateModemRegistry(modem, provisionStatus) {
 }
 
 async function loadModemBilling() {
+  if (billingRequestInFlight) return
+  billingRequestInFlight = true
   try {
     const response = await fetch("/api/modem-billing", { cache: "no-store" })
     if (!response.ok) throw new Error(await response.text())
@@ -781,6 +850,8 @@ async function loadModemBilling() {
     modemBilling.value = Array.isArray(data.modems) ? data.modems : []
   } catch (error) {
     billingMessage.value = error instanceof Error ? error.message : "billing refresh failed"
+  } finally {
+    billingRequestInFlight = false
   }
 }
 
@@ -967,20 +1038,24 @@ async function flashRegistryModem(item) {
   registrySaving.value = (item.node_id && item.imei) ? `${item.node_id}:${item.imei}` : (item.imei || `${item.last_seen_node_id}:${item.last_seen_modem_id}`)
   registryMessage.value = ""
   try {
-    const overlayKey = `${item.last_seen_node_id || item.node_id || ""}:${item.last_seen_modem_id || ""}`
+    const targetModem = liveModemForRegistryItem(item)
+    if (!targetModem) {
+      throw new Error(`insert modem #${item.modem_number || "?"} so the node can target its current live slot`)
+    }
+    const overlayKey = flashOverlayKeyForModem(targetModem)
     rememberActiveFlashKey(overlayKey)
-    debugFlashOverlay("action:flashRegistryModem", { overlay_key: overlayKey, modem_number: item.modem_number || "?" })
-    openFlashOverlay(`Modem #${item.modem_number || "?"}${item.last_seen_modem_id ? ` • ${item.last_seen_modem_id}` : ""}`, "queued", "queued", flashOverlayBody("running", ""), overlayKey)
+    debugFlashOverlay("action:flashRegistryModem", { overlay_key: overlayKey, modem_number: item.modem_number || "?", modem_id: targetModem.id })
+    openFlashOverlay(`#${item.modem_number || localModemNumber(targetModem) || "?"} • ${targetModem.id}${targetModem.node_id ? ` • ${targetModem.node_id}` : ""}`, "queued", "queued", flashOverlayBody("running", ""), overlayKey)
     const response = await fetch("/api/command", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        node_id: item.last_seen_node_id || "",
+        node_id: targetModem.node_id || item.node_id || item.last_seen_node_id || "",
         type: "flash_modem",
         timeout_sec: 1800,
         params: {
-          modem_id: item.last_seen_modem_id || "",
-          modem_ids: item.last_seen_modem_id ? [item.last_seen_modem_id] : [],
+          modem_id: targetModem.id || "",
+          modem_ids: targetModem.id ? [targetModem.id] : [],
         },
       }),
     })
@@ -1102,13 +1177,20 @@ async function runLocalNodeUpdate() {
 
 function quickAction(type) { sendCommand(type, "quick") }
 watch(selectedNode, () => { if (!filteredModems.value.some((item) => item.id === selectedModem.value)) selectedModem.value = "all" })
+watch(activeTab, (value) => {
+  if (value === "modems") loadModemBilling()
+})
 watch([modems, overview], () => { syncFlashOverlayFromOverview() }, { deep: true })
 onMounted(() => {
   loadOverview()
   loadFlashSettings()
+  if (activeTab.value === "modems") loadModemBilling()
   localOverviewTimer = window.setInterval(() => {
     loadOverview(false)
-  }, 1500)
+  }, 4000)
+  billingTimer = window.setInterval(() => {
+    if (activeTab.value === "modems") loadModemBilling()
+  }, 20000)
   fallbackTimer = window.setInterval(() => {
     if (realtimeState.value !== "active") loadOverview(false)
   }, 15000)
@@ -1123,6 +1205,10 @@ onBeforeUnmount(() => {
   if (localOverviewTimer) {
     window.clearInterval(localOverviewTimer)
     localOverviewTimer = null
+  }
+  if (billingTimer) {
+    window.clearInterval(billingTimer)
+    billingTimer = null
   }
 })
 </script>
@@ -1162,7 +1248,7 @@ onBeforeUnmount(() => {
 
       <div v-if="refreshError" class="rounded-[24px] border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{{ refreshError }}</div>
 
-      <Tabs default-value="nodes" class="space-y-4">
+      <Tabs v-model="activeTab" default-value="nodes" class="space-y-4">
         <TabsList class="w-fit rounded-2xl bg-muted/60 p-1">
           <TabsTrigger value="nodes" class="rounded-xl px-4">Nodes</TabsTrigger>
           <TabsTrigger value="modems" class="rounded-xl px-4">Modems</TabsTrigger>
@@ -1186,11 +1272,11 @@ onBeforeUnmount(() => {
         </TabsContent>
 
         <TabsContent value="modems" class="space-y-4">
-          <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><div class="flex flex-wrap items-start justify-between gap-3"><div><CardTitle class="text-2xl">Modem fleet</CardTitle><CardDescription>Observed egress IP, node-local modem number, firmware baseline, SIM ICCID, and package usage.</CardDescription></div><div class="w-full max-w-[220px] space-y-2"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Scope</div><Select v-model="modemFleetScope"><SelectTrigger class="rounded-2xl"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="current_node">This node only</SelectItem><SelectItem value="all_nodes">All nodes</SelectItem></SelectContent></Select></div></div></CardHeader><CardContent class="p-4 sm:p-6"><div class="overflow-hidden rounded-[24px] border border-border/70"><Table><TableHeader><TableRow class="hover:bg-transparent"><TableHead>Node / Modem</TableHead><TableHead>Status</TableHead><TableHead>Observed IP</TableHead><TableHead>SIM</TableHead><TableHead>Operator</TableHead><TableHead>Tech</TableHead><TableHead>Signal</TableHead><TableHead>Sessions</TableHead><TableHead>Traffic</TableHead><TableHead>Plan</TableHead><TableHead>Action</TableHead></TableRow></TableHeader><TableBody><TableRow v-for="modem in fleetModems" :key="fleetRowKey(modem)"><TableCell><div class="font-medium">#{{ localModemNumber(modem) }} • {{ modem.id }}</div><div class="text-xs text-muted-foreground">{{ modem.node_id }} • port {{ modem.port || "-" }}</div><div v-if="aliasUrlForModem(modem)" class="text-xs text-muted-foreground"><a :href="aliasUrlForModem(modem)" class="underline underline-offset-4" target="_blank" rel="noreferrer">{{ aliasUrlForModem(modem) }}</a></div><div class="text-xs text-muted-foreground">{{ modem.imei || "IMEI pending" }}</div><div class="text-xs text-muted-foreground">{{ modem.usb_mode || "mode pending" }}<span v-if="modem.usb_vendor_id || modem.usb_product_id"> • {{ modem.usb_vendor_id || "----" }}:{{ modem.usb_product_id || "----" }}</span></div><div v-if="modem.usb_mode === 'charging'" class="mt-1 text-[11px] text-amber-600">Recovery required: unplug and reconnect before retrying flash.</div></TableCell><TableCell><div class="space-y-1"><Badge :variant="tone(modem.state)" class="rounded-full capitalize">{{ modem.state || "unknown" }}</Badge><Badge v-if="modem.provision_status" :variant="modem.provision_status === 'ready' ? 'secondary' : modem.provision_status === 'requires_flash' ? 'destructive' : 'outline'" class="rounded-full">{{ modem.provision_status }}</Badge><Badge v-if="modem.sim_needs_check || modem.sim_quarantined" variant="destructive" class="rounded-full">SIM check required</Badge></div><div v-if="modem.flash_message" class="mt-2 text-[11px] text-muted-foreground">{{ modem.flash_message }}</div></TableCell><TableCell class="font-mono text-xs">{{ modem.wan_ip || "-" }}</TableCell><TableCell class="text-xs"><div class="font-mono">{{ modem.iccid || "-" }}</div><div class="text-muted-foreground">{{ modem.client_eligible === false ? "blocked for clients" : "eligible" }}</div></TableCell><TableCell>{{ modem.operator || "-" }}</TableCell><TableCell>{{ modem.technology || "-" }}</TableCell><TableCell><div class="flex items-center gap-2"><Signal class="h-4 w-4 text-muted-foreground" /><span>{{ modem.signal_strength ?? "-" }}</span></div><div class="mt-1 text-[11px] text-muted-foreground">{{ modem.software_version || "-" }} / {{ modem.webui_version || "-" }}</div></TableCell><TableCell>{{ modem.active_sessions || 0 }}</TableCell><TableCell class="text-xs text-muted-foreground"><div>In: {{ bytesLabel(modem.traffic_bytes_in) }}</div><div>Out: {{ bytesLabel(modem.traffic_bytes_out) }}</div></TableCell><TableCell class="text-xs text-muted-foreground"><template v-if="billingByKey[`${modem.node_id}:${modem.id}`]"><div>{{ billingByKey[`${modem.node_id}:${modem.id}`].plan_kind === 'unlimited' ? 'Unlimited' : `${billingByKey[`${modem.node_id}:${modem.id}`].traffic_limit_gb || '-'} GB` }}</div><div>Cycle: {{ bytesLabel(billingByKey[`${modem.node_id}:${modem.id}`].cycle_used_bytes) }}</div></template><span v-else>-</span></TableCell><TableCell class="text-xs"><Button v-if="canFlashLiveModem(modem)" variant="destructive" size="sm" class="rounded-full" :disabled="registrySaving === ((modem.node_id && modem.imei) ? `${modem.node_id}:${modem.imei}` : (modem.imei || `${modem.node_id}:${modem.id}`))" @click="flashLiveModem(modem)">Flash now</Button><span v-else class="text-muted-foreground">-</span></TableCell></TableRow><TableRow v-if="!fleetModems.length"><TableCell colspan="11" class="py-10 text-center text-muted-foreground">{{ modemFleetScope === 'current_node' ? 'No modems discovered on this node yet.' : 'No modems have been discovered yet.' }}</TableCell></TableRow></TableBody></Table></div></CardContent></Card>
+          <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><div class="flex flex-wrap items-start justify-between gap-3"><div><CardTitle class="text-2xl">Modem fleet</CardTitle><CardDescription>Observed egress IP, node-local modem number, firmware baseline, SIM ICCID, and package usage.</CardDescription></div><div class="w-full max-w-[220px] space-y-2"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Scope</div><Select v-model="modemFleetScope"><SelectTrigger class="rounded-2xl"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="current_node">This node only</SelectItem><SelectItem value="all_nodes">All nodes</SelectItem></SelectContent></Select></div></div></CardHeader><CardContent class="p-4 sm:p-6"><div class="overflow-hidden rounded-[24px] border border-border/70"><Table><TableHeader><TableRow class="hover:bg-transparent"><TableHead>Node / Modem</TableHead><TableHead>Status</TableHead><TableHead>Observed IP</TableHead><TableHead>SIM</TableHead><TableHead>Operator</TableHead><TableHead>Tech</TableHead><TableHead>Signal</TableHead><TableHead>Sessions</TableHead><TableHead>Traffic</TableHead><TableHead>Plan</TableHead><TableHead>Action</TableHead></TableRow></TableHeader><TableBody><TableRow v-for="modem in fleetModems" :key="fleetRowKey(modem)"><TableCell><div class="font-medium">#{{ localModemNumber(modem) }} • {{ modem.id }}</div><div class="text-xs text-muted-foreground">{{ modem.node_id }} • port {{ modem.port || "-" }}</div><div v-if="aliasUrlForModem(modem)" class="text-xs text-muted-foreground"><a :href="aliasUrlForModem(modem)" class="underline underline-offset-4" target="_blank" rel="noreferrer">{{ aliasUrlForModem(modem) }}</a></div><div class="text-xs text-muted-foreground">{{ modem.imei || "IMEI pending" }}</div><div class="text-xs text-muted-foreground">{{ modem.usb_mode || "mode pending" }}<span v-if="modem.usb_vendor_id || modem.usb_product_id"> • {{ modem.usb_vendor_id || "----" }}:{{ modem.usb_product_id || "----" }}</span></div><div v-if="modem.usb_mode === 'charging'" class="mt-1 text-[11px] text-amber-600">Recovery required: unplug and reconnect before retrying flash.</div></TableCell><TableCell><div class="space-y-1"><Badge :variant="tone(modem.state)" class="rounded-full capitalize">{{ modem.state || "unknown" }}</Badge><Badge v-if="modem.provision_status" :variant="modem.provision_status === 'ready' ? 'secondary' : modem.provision_status === 'requires_flash' ? 'destructive' : 'outline'" class="rounded-full">{{ modem.provision_status }}</Badge><Badge v-if="modem.sim_needs_check || modem.sim_quarantined" variant="destructive" class="rounded-full">SIM check required</Badge></div><div v-if="modem.flash_message" class="mt-2 text-[11px] text-muted-foreground">{{ modem.flash_message }}</div></TableCell><TableCell class="font-mono text-xs">{{ modem.wan_ip || "-" }}</TableCell><TableCell class="text-xs"><div class="font-mono">{{ modem.iccid || "-" }}</div><div class="text-muted-foreground">{{ modem.client_eligible === false ? "blocked for clients" : "eligible" }}</div></TableCell><TableCell>{{ modem.operator || "-" }}</TableCell><TableCell>{{ modem.technology || "-" }}</TableCell><TableCell><div class="flex items-center gap-2"><Signal class="h-4 w-4 text-muted-foreground" /><span>{{ modem.signal_strength ?? "-" }}</span></div><div class="mt-1 text-[11px] text-muted-foreground">{{ modem.software_version || "-" }} / {{ modem.webui_version || "-" }}</div></TableCell><TableCell>{{ modem.active_sessions || 0 }}</TableCell><TableCell class="text-xs text-muted-foreground"><div>In: {{ bytesLabel(modem.traffic_bytes_in) }}</div><div>Out: {{ bytesLabel(modem.traffic_bytes_out) }}</div></TableCell><TableCell class="text-xs text-muted-foreground"><template v-if="billingItemForModem(modem)"><div>{{ billingItemForModem(modem).plan_kind === 'unlimited' ? 'Unlimited' : `${billingItemForModem(modem).traffic_limit_gb || '-'} GB` }}</div><div>Cycle: {{ bytesLabel(billingItemForModem(modem).cycle_used_bytes) }}</div></template><span v-else>-</span></TableCell><TableCell class="text-xs"><Button v-if="canFlashLiveModem(modem)" variant="destructive" size="sm" class="rounded-full" :disabled="registrySaving === ((modem.node_id && modem.imei) ? `${modem.node_id}:${modem.imei}` : (modem.imei || `${modem.node_id}:${modem.id}`))" @click="flashLiveModem(modem)">Flash now</Button><span v-else class="text-muted-foreground">-</span></TableCell></TableRow><TableRow v-if="!fleetModems.length"><TableCell colspan="11" class="py-10 text-center text-muted-foreground">{{ modemFleetScope === 'current_node' ? 'No modems discovered on this node yet.' : 'No modems have been discovered yet.' }}</TableCell></TableRow></TableBody></Table></div></CardContent></Card>
           <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(400px,0.8fr)]">
             <div class="space-y-4">
               <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><div class="flex flex-wrap items-start justify-between gap-3"><div><CardTitle class="text-2xl">Provisioning registry</CardTitle><CardDescription>Every modem gets a stable number by IMEI, so you can label the hardware and keep tracking it after moving to another USB port.</CardDescription></div><Button variant="destructive" class="rounded-full" :disabled="registryResetting || isActiveFlashJob(flashJob)" @click="resetLocalNodeModemState()">{{ registryResetting ? "Clearing..." : "Clear node memory" }}</Button></div></CardHeader><CardContent class="space-y-4 p-4 sm:p-6"><div v-if="registryMessage" class="rounded-xl border border-border/70 bg-muted/50 px-3 py-2 text-sm">{{ registryMessage }}</div><div class="rounded-xl border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">This clears the local node modem registry, active flash state, and requests a server-side reset for this node. Use it before retesting the same modem as new hardware.</div><div v-for="item in currentNodeRegistry" :key="`${item.node_id}:${item.imei}`" class="rounded-[24px] border border-border/70 p-4 space-y-3"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="flex flex-wrap items-center gap-2"><div class="font-medium">Modem #{{ item.modem_number }}</div><Badge :variant="item.provision_status === 'ready' ? 'secondary' : item.provision_status === 'requires_flash' ? 'destructive' : 'outline'" class="rounded-full">{{ item.provision_status || "new" }}</Badge></div><div class="mt-1 font-mono text-xs text-muted-foreground">{{ item.imei }}</div><div class="mt-1 text-xs text-muted-foreground">{{ item.device_name || "-" }} • {{ item.hardware_version || "-" }}</div><div class="mt-1 text-xs text-muted-foreground">{{ item.software_version || "-" }} • {{ item.webui_version || "-" }}</div></div><div class="text-right text-xs text-muted-foreground"><div>{{ item.last_seen_node_id || "-" }} • {{ item.last_seen_modem_id || "-" }}</div><div>{{ relativeTime(item.last_seen_at) }}</div></div></div><div class="rounded-xl border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">Safe flash is limited to supported E3372h-153 baselines from the approved firmware list. Unknown revisions stay blocked.</div><div class="flex flex-wrap gap-3"><Button variant="outline" class="rounded-full" :disabled="registrySaving === `${item.node_id}:${item.imei}`" @click="updateModemRegistry(item, 'ready')">Mark ready</Button><Button variant="secondary" class="rounded-full" :disabled="registrySaving === `${item.node_id}:${item.imei}`" @click="updateModemRegistry(item, 'requires_flash')">Needs flash</Button><Button v-if="item.provision_status === 'requires_flash'" variant="destructive" class="rounded-full" :disabled="registrySaving === `${item.node_id}:${item.imei}` || !item.last_seen_node_id || !item.last_seen_modem_id" @click="flashRegistryModem(item)">Flash now</Button></div></div><div v-if="!currentNodeRegistry.length" class="rounded-[24px] border border-dashed border-border/70 px-4 py-10 text-center text-sm text-muted-foreground">No provisioned modems yet. Plug them one by one to assign a stable modem number.</div></CardContent></Card>
-              <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><CardTitle class="text-2xl">SIM package controls</CardTitle><CardDescription>Per-modem traffic package, SIM health status, auto reset day, and manual reset of the current billing cycle.</CardDescription></CardHeader><CardContent class="space-y-4 p-4 sm:p-6"><div v-if="simCheckRequiredCount" class="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{{ simCheckRequiredCount }} SIM card(s) are blocked from client traffic until you verify them on a healthy modem.</div><div v-if="billingMessage" class="rounded-xl border border-border/70 bg-muted/50 px-3 py-2 text-sm">{{ billingMessage }}</div><div v-for="item in modemBilling" :key="`${item.node_id}:${item.modem_id}`" class="rounded-[24px] border border-border/70 p-4 space-y-3"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="flex flex-wrap items-center gap-2"><div class="font-medium">#{{ localModemNumber({ node_id: item.node_id, id: item.modem_id, ordinal: item.modem_ordinal }) }} • {{ item.modem_id }}</div><Badge v-if="registryByModemKey[`${item.node_id}:${item.modem_id}`]?.provision_status" :variant="registryByModemKey[`${item.node_id}:${item.modem_id}`]?.provision_status === 'ready' ? 'secondary' : registryByModemKey[`${item.node_id}:${item.modem_id}`]?.provision_status === 'requires_flash' ? 'destructive' : 'outline'" class="rounded-full">{{ registryByModemKey[`${item.node_id}:${item.modem_id}`]?.provision_status }}</Badge><Badge v-if="item.sim_needs_check || item.sim_quarantined" variant="destructive" class="rounded-full">Blocked for clients</Badge><Badge v-else variant="secondary" class="rounded-full">SIM healthy</Badge></div><div class="text-xs text-muted-foreground">{{ item.node_id }} • ICCID {{ item.iccid || "-" }} • cycle used {{ bytesLabel(item.cycle_used_bytes) }}<span v-if="item.next_reset_at"> • next reset {{ relativeTime(item.next_reset_at) }}</span></div><div v-if="item.sim_quarantine_note" class="mt-1 text-xs text-destructive">{{ item.sim_quarantine_note }}</div></div><div class="text-right text-xs text-muted-foreground"><div>Started {{ relativeTime(item.cycle_start_at) }}</div><div v-if="item.remaining_bytes != null">Left {{ bytesLabel(item.remaining_bytes) }}</div><div v-if="item.sim_last_checked_at">Checked {{ relativeTime(item.sim_last_checked_at) }}</div></div></div><div class="grid gap-3 md:grid-cols-4"><div class="space-y-2"><div class="text-sm font-medium">Plan</div><Select v-model="item.plan_kind"><SelectTrigger class="rounded-2xl"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="metered">Metered</SelectItem><SelectItem value="unlimited">Unlimited</SelectItem></SelectContent></Select></div><div class="space-y-2"><div class="text-sm font-medium">Limit GB</div><Input v-model="item.traffic_limit_gb" :disabled="item.plan_kind === 'unlimited'" class="rounded-2xl" type="number" min="0" step="0.1" /></div><div class="space-y-2"><div class="text-sm font-medium">Auto reset day</div><Input v-model="item.auto_reset_day" class="rounded-2xl" type="number" min="1" max="28" placeholder="2" /></div><div class="space-y-2"><div class="text-sm font-medium">Notes</div><Input v-model="item.notes" class="rounded-2xl" placeholder="SIM tariff note" /></div></div><div class="grid gap-2 text-xs text-muted-foreground md:grid-cols-3"><div class="rounded-xl border border-border/70 p-3"><div class="font-medium text-foreground">ICCID</div><div class="mt-1 font-mono">{{ item.iccid || "-" }}</div></div><div class="rounded-xl border border-border/70 p-3"><div class="font-medium text-foreground">Degraded / 24h</div><div class="mt-1">{{ item.sim_degraded_events_24h || 0 }}</div></div><div class="rounded-xl border border-border/70 p-3"><div class="font-medium text-foreground">Client status</div><div class="mt-1">{{ item.sim_needs_check || item.sim_quarantined ? "blocked" : "eligible" }}</div></div></div><div class="flex flex-wrap gap-3"><Button class="rounded-full" :disabled="billingSaving === `${item.node_id}:${item.modem_id}`" @click="saveBilling(item)">{{ billingSaving === `${item.node_id}:${item.modem_id}` ? 'Saving...' : 'Save' }}</Button><Button variant="outline" class="rounded-full" :disabled="billingSaving === `${item.node_id}:${item.modem_id}`" @click="resetBilling(item)">Manual reset</Button><Button variant="secondary" class="rounded-full" :disabled="simChecking === `${item.node_id}:${item.modem_id}` || !(item.sim_needs_check || item.sim_quarantined)" @click="verifySim(item)">{{ simChecking === `${item.node_id}:${item.modem_id}` ? 'Checking...' : 'Verify SIM' }}</Button></div></div><div v-if="!modemBilling.length" class="rounded-[24px] border border-dashed border-border/70 px-4 py-10 text-center text-sm text-muted-foreground">No modem billing data yet.</div></CardContent></Card>
+              <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><CardTitle class="text-2xl">SIM package controls</CardTitle><CardDescription>Per-modem traffic package, SIM health status, auto reset day, and manual reset of the current billing cycle.</CardDescription></CardHeader><CardContent class="space-y-4 p-4 sm:p-6"><div v-if="simCheckRequiredCount" class="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{{ simCheckRequiredCount }} SIM card(s) are blocked from client traffic until you verify them on a healthy modem.</div><div v-if="billingMessage" class="rounded-xl border border-border/70 bg-muted/50 px-3 py-2 text-sm">{{ billingMessage }}</div><div v-for="item in modemBilling" :key="`${item.node_id}:${item.modem_ordinal || item.modem_id}`" class="rounded-[24px] border border-border/70 p-4 space-y-3"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="flex flex-wrap items-center gap-2"><div class="font-medium">#{{ localModemNumber({ node_id: item.node_id, id: item.modem_id, ordinal: item.modem_ordinal }) }} • {{ item.modem_id }}</div><Badge v-if="registryItemForBillingItem(item)?.provision_status" :variant="registryItemForBillingItem(item)?.provision_status === 'ready' ? 'secondary' : registryItemForBillingItem(item)?.provision_status === 'requires_flash' ? 'destructive' : 'outline'" class="rounded-full">{{ registryItemForBillingItem(item)?.provision_status }}</Badge><Badge v-if="item.sim_needs_check || item.sim_quarantined" variant="destructive" class="rounded-full">Blocked for clients</Badge><Badge v-else variant="secondary" class="rounded-full">SIM healthy</Badge></div><div class="text-xs text-muted-foreground">{{ item.node_id }} • ICCID {{ item.iccid || "-" }} • cycle used {{ bytesLabel(item.cycle_used_bytes) }}<span v-if="item.next_reset_at"> • next reset {{ relativeTime(item.next_reset_at) }}</span></div><div v-if="item.sim_quarantine_note" class="mt-1 text-xs text-destructive">{{ item.sim_quarantine_note }}</div></div><div class="text-right text-xs text-muted-foreground"><div>Started {{ relativeTime(item.cycle_start_at) }}</div><div v-if="item.remaining_bytes != null">Left {{ bytesLabel(item.remaining_bytes) }}</div><div v-if="item.sim_last_checked_at">Checked {{ relativeTime(item.sim_last_checked_at) }}</div></div></div><div class="grid gap-3 md:grid-cols-4"><div class="space-y-2"><div class="text-sm font-medium">Plan</div><Select v-model="item.plan_kind"><SelectTrigger class="rounded-2xl"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="metered">Metered</SelectItem><SelectItem value="unlimited">Unlimited</SelectItem></SelectContent></Select></div><div class="space-y-2"><div class="text-sm font-medium">Limit GB</div><Input v-model="item.traffic_limit_gb" :disabled="item.plan_kind === 'unlimited'" class="rounded-2xl" type="number" min="0" step="0.1" /></div><div class="space-y-2"><div class="text-sm font-medium">Auto reset day</div><Input v-model="item.auto_reset_day" class="rounded-2xl" type="number" min="1" max="28" placeholder="2" /></div><div class="space-y-2"><div class="text-sm font-medium">Notes</div><Input v-model="item.notes" class="rounded-2xl" placeholder="SIM tariff note" /></div></div><div class="grid gap-2 text-xs text-muted-foreground md:grid-cols-3"><div class="rounded-xl border border-border/70 p-3"><div class="font-medium text-foreground">ICCID</div><div class="mt-1 font-mono">{{ item.iccid || "-" }}</div></div><div class="rounded-xl border border-border/70 p-3"><div class="font-medium text-foreground">Degraded / 24h</div><div class="mt-1">{{ item.sim_degraded_events_24h || 0 }}</div></div><div class="rounded-xl border border-border/70 p-3"><div class="font-medium text-foreground">Client status</div><div class="mt-1">{{ item.sim_needs_check || item.sim_quarantined ? "blocked" : "eligible" }}</div></div></div><div class="flex flex-wrap gap-3"><Button class="rounded-full" :disabled="billingSaving === `${item.node_id}:${item.modem_id}`" @click="saveBilling(item)">{{ billingSaving === `${item.node_id}:${item.modem_id}` ? 'Saving...' : 'Save' }}</Button><Button variant="outline" class="rounded-full" :disabled="billingSaving === `${item.node_id}:${item.modem_id}`" @click="resetBilling(item)">Manual reset</Button><Button variant="secondary" class="rounded-full" :disabled="simChecking === `${item.node_id}:${item.modem_id}` || !(item.sim_needs_check || item.sim_quarantined)" @click="verifySim(item)">{{ simChecking === `${item.node_id}:${item.modem_id}` ? 'Checking...' : 'Verify SIM' }}</Button></div></div><div v-if="!modemBilling.length" class="rounded-[24px] border border-dashed border-border/70 px-4 py-10 text-center text-sm text-muted-foreground">No modem billing data yet.</div></CardContent></Card>
             </div>
             <Card class="rounded-[28px] border-border/70 shadow-sm">
               <CardHeader class="border-b border-border/60 pb-5">
