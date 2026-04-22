@@ -187,6 +187,79 @@ def normalize_digits(raw):
     return "".join(ch for ch in str(raw or "") if ch.isdigit())
 
 
+def xml_tag_text(text, tag):
+    match = re.search(rf"<{tag}>(.*?)</{tag}>", str(text or ""), re.I | re.S)
+    return match.group(1).strip() if match else ""
+
+
+def first_int_from_text(value):
+    match = re.search(r"-?\d+", str(value or ""))
+    if not match:
+        return 0
+    try:
+        return int(match.group(0))
+    except Exception:
+        return 0
+
+
+def signal_mode_to_label(value):
+    raw = str(value or "").strip().lower()
+    if raw in ("7", "lte", "4g"):
+        return "lte"
+    if raw in ("0", "wcdma", "umts", "3g"):
+        return "wcdma"
+    if raw in ("2", "gsm", "edge", "gprs", "2g"):
+        return "gsm"
+    return raw
+
+
+def curl_fetch_text(url, cookie="", token=""):
+    args = ["curl", "-fsS", "--max-time", str(HILINK_PROBE_TIMEOUT)]
+    if cookie:
+        args.extend(["-H", f"Cookie: {cookie}"])
+    if token:
+        args.extend(["-H", f"__RequestVerificationToken: {token}"])
+    args.append(url)
+    result = subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return ""
+    return result.stdout or ""
+
+
+def merge_local_modem_snapshot(existing, incoming):
+    updated = dict(existing if isinstance(existing, dict) else {})
+    incoming = incoming if isinstance(incoming, dict) else {}
+    for key, value in incoming.items():
+        if isinstance(value, str):
+            if value.strip() or not str(updated.get(key) or "").strip():
+                updated[key] = value
+            continue
+        if isinstance(value, bool):
+            updated[key] = value
+            continue
+        if isinstance(value, (int, float)):
+            current = updated.get(key)
+            try:
+                current_num = int(current or 0)
+            except Exception:
+                current_num = 0
+            try:
+                next_num = int(value or 0)
+            except Exception:
+                next_num = 0
+            if next_num != 0 or current_num == 0:
+                updated[key] = value
+            continue
+        if value is not None:
+            updated[key] = value
+    return updated
+
+
 def modem_has_target(main_version, webui_version):
     main_version = str(main_version or "").strip()
     webui_version = str(webui_version or "").strip()
@@ -894,20 +967,11 @@ def read_hilink_device_info(base_url):
         tok_match = re.search(r"<TokInfo>(.*?)</TokInfo>", body, re.S)
         if not ses_match or not tok_match:
             return None
-        info = subprocess.run(
-            [
-                "curl", "-fsS", "--max-time", str(HILINK_PROBE_TIMEOUT),
-                "-H", f"Cookie: {ses_match.group(1).strip()}",
-                "-H", f"__RequestVerificationToken: {tok_match.group(1).strip()}",
-                f"{base_url}/api/device/information",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if info.returncode != 0:
-            return None
-        text = info.stdout or ""
+        cookie = ses_match.group(1).strip()
+        token = tok_match.group(1).strip()
+        text = curl_fetch_text(f"{base_url}/api/device/information", cookie, token)
+        if not text:
+            text = curl_fetch_text(f"{base_url}/api/device/information")
         if "<error>" in text:
             return None
         fields = {}
@@ -920,10 +984,29 @@ def read_hilink_device_info(base_url):
             ("SoftwareVersion", "software_version"),
             ("WebUIVersion", "webui_version"),
             ("ProductFamily", "product_family"),
+            ("WanIPAddress", "wan_ip"),
         ):
-            match = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.S)
-            if match:
-                fields[key] = match.group(1).strip()
+            value = xml_tag_text(text, tag)
+            if value:
+                fields[key] = value
+        signal_text = curl_fetch_text(f"{base_url}/api/device/signal", cookie, token)
+        if not signal_text or "<error>" in signal_text:
+            signal_text = curl_fetch_text(f"{base_url}/api/device/signal")
+        if signal_text and "<error>" not in signal_text:
+            signal_strength = first_int_from_text(xml_tag_text(signal_text, "Rsrp"))
+            if signal_strength == 0:
+                signal_strength = first_int_from_text(xml_tag_text(signal_text, "Rssi"))
+            if signal_strength != 0:
+                fields["signal_strength"] = signal_strength
+            mode = signal_mode_to_label(xml_tag_text(signal_text, "Mode"))
+            if mode:
+                fields["technology"] = mode
+        operator_text = curl_fetch_text(f"{base_url}/operator.cgi", cookie, token)
+        if not operator_text or "<error>" in operator_text:
+            operator_text = curl_fetch_text(f"{base_url}/operator.cgi")
+        operator = xml_tag_text(operator_text, "FullName")
+        if operator:
+            fields["operator"] = operator
         fields["local_base_url"] = base_url
         result = fields if fields else None
     except Exception:
@@ -1151,8 +1234,7 @@ def inject_local_runtime_state(overview):
         merged = False
         for idx, item in enumerate(modems):
             if same_modem(item, local_modem):
-                updated = dict(item)
-                updated.update(local_modem)
+                updated = merge_local_modem_snapshot(item, local_modem)
                 modems[idx] = updated
                 local_modem = updated
                 merged = True
@@ -1163,8 +1245,7 @@ def inject_local_runtime_state(overview):
         merged = False
         for idx, item in enumerate(node_modems):
             if same_modem(item, local_modem):
-                updated = dict(item)
-                updated.update(local_modem)
+                updated = merge_local_modem_snapshot(item, local_modem)
                 node_modems[idx] = updated
                 merged = True
                 break
