@@ -149,13 +149,10 @@ const fleetModems = computed(() => {
     : modemRegistry.value
 
   const liveByNodeImei = {}
-  const liveByNodeModemId = {}
   for (const modem of liveModems) {
     const nodeId = String(modem?.node_id || "").trim()
     const imei = String(modem?.imei || "").trim()
-    const modemId = String(modem?.id || "").trim()
     if (nodeId && imei) liveByNodeImei[`${nodeId}:${imei}`] = modem
-    if (nodeId && modemId) liveByNodeModemId[`${nodeId}:${modemId}`] = modem
   }
 
   const rows = []
@@ -176,17 +173,16 @@ const fleetModems = computed(() => {
     const nodeId = String(item?.node_id || item?.last_seen_node_id || "").trim()
     const imei = String(item?.imei || "").trim()
     const modemId = String(item?.last_seen_modem_id || "").trim()
-    const live = (nodeId && imei ? liveByNodeImei[`${nodeId}:${imei}`] : null)
-      || (nodeId && modemId ? liveByNodeModemId[`${nodeId}:${modemId}`] : null)
-      || null
+    const live = nodeId && imei ? liveByNodeImei[`${nodeId}:${imei}`] : null
+    const stableNumber = Number(item?.modem_number || 0) || 0
 
     const row = {
       node_id: nodeId,
       id: modemId || (imei ? `imei-${imei}` : "unknown-modem"),
       imei,
       state: "offline",
-      modem_number: Number(item?.modem_number || 0) || 0,
-      ordinal: Number(item?.modem_number || 0) || 0,
+      modem_number: stableNumber,
+      ordinal: stableNumber,
       known_to_node: true,
       local_flashed: String(item?.provision_status || "").trim().toLowerCase() === "ready",
       provision_status: item?.provision_status || "",
@@ -203,13 +199,16 @@ const fleetModems = computed(() => {
       traffic_bytes_out: 0,
       last_seen_at: item?.last_seen_at || "",
       ...live,
+      modem_number: stableNumber || Number(live?.modem_number || 0) || 0,
+      ordinal: stableNumber || Number(live?.ordinal || 0) || 0,
+      _fleet_key: registryFleetRowKey(item),
     }
     rows.push(row)
-    if (live) usedLiveKeys.add(fleetRowKey(live))
+    if (live) usedLiveKeys.add(liveFleetRowKey(live))
   }
 
   const remainingLive = [...liveModems]
-    .filter((modem) => !usedLiveKeys.has(fleetRowKey(modem)))
+    .filter((modem) => !usedLiveKeys.has(liveFleetRowKey(modem)))
     .sort((left, right) => {
       const leftNode = String(left?.node_id || "").trim()
       const rightNode = String(right?.node_id || "").trim()
@@ -217,8 +216,12 @@ const fleetModems = computed(() => {
       const leftNumber = Number(localModemNumber(left) || 0)
       const rightNumber = Number(localModemNumber(right) || 0)
       if (leftNumber > 0 && rightNumber > 0 && leftNumber !== rightNumber) return leftNumber - rightNumber
-      return fleetRowKey(left).localeCompare(fleetRowKey(right))
+      return liveFleetRowKey(left).localeCompare(liveFleetRowKey(right))
     })
+    .map((modem) => ({
+      ...modem,
+      _fleet_key: liveFleetRowKey(modem),
+    }))
 
   return [...rows, ...remainingLive]
 })
@@ -302,6 +305,8 @@ function localModemNumber(modem) {
   if (Number.isFinite(registryNumber) && registryNumber > 0) return registryNumber
   const ordinal = Number(modem.ordinal || 0)
   if (Number.isFinite(ordinal) && ordinal > 0) return ordinal
+  const imei = String(modem.imei || "").trim()
+  if (imei) return "?"
   const key = modem.node_id && modem.id ? `${modem.node_id}:${modem.id}` : ""
   const mapped = key ? registryByModemKey.value[key] : null
   const mappedNumber = Number(mapped?.modem_number || 0)
@@ -309,14 +314,31 @@ function localModemNumber(modem) {
   return "?"
 }
 
+function registryFleetRowKey(item) {
+  if (!item) return ""
+  const nodeId = String(item.node_id || item.last_seen_node_id || "").trim()
+  const imei = String(item.imei || "").trim()
+  const modemNumber = Number(item.modem_number || 0)
+  const modemId = String(item.last_seen_modem_id || item.id || "").trim()
+  if (nodeId && imei) return `registry:${nodeId}:${imei}`
+  if (nodeId && Number.isFinite(modemNumber) && modemNumber > 0) return `registry:${nodeId}:slot:${modemNumber}`
+  if (nodeId && modemId) return `registry:${nodeId}:${modemId}`
+  return `registry:${imei || modemId || "unknown"}`
+}
+
+function liveFleetRowKey(modem) {
+  if (!modem) return ""
+  const nodeId = String(modem.node_id || "").trim()
+  const imei = String(modem.imei || "").trim()
+  const modemId = String(modem.id || "").trim()
+  if (nodeId && imei) return `live:${nodeId}:${imei}`
+  if (nodeId && modemId) return `live:${nodeId}:${modemId}`
+  return `live:${imei || modemId || "unknown"}`
+}
+
 function fleetRowKey(modem) {
   if (!modem) return ""
-  const nodeId = String(modem.node_id || modem.last_seen_node_id || "").trim()
-  const imei = String(modem.imei || "").trim()
-  const modemId = String(modem.id || modem.last_seen_modem_id || "").trim()
-  if (nodeId && imei) return `${nodeId}:${imei}`
-  if (nodeId && modemId) return `${nodeId}:${modemId}`
-  return imei || modemId || ""
+  return String(modem._fleet_key || "").trim() || liveFleetRowKey(modem)
 }
 
 function aliasUrlForModem(modem) {
