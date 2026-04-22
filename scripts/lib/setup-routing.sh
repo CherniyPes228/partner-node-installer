@@ -167,7 +167,7 @@ preferred_uplink_iface() {
 
 ensure_preferred_default() {
   local iface="$1"
-  local conn type metric gateway
+  local conn type metric gateway state current_conn
 
   [[ -n "$iface" ]] || return 0
   remember_preferred_uplink "$iface"
@@ -181,6 +181,8 @@ ensure_preferred_default() {
 
   if command -v nmcli >/dev/null 2>&1; then
     nmcli device set "$iface" managed yes >/dev/null 2>&1 || true
+    state=$(nmcli -g GENERAL.STATE device show "$iface" 2>/dev/null | head -n 1 | tr -d '\r' || true)
+    current_conn=$(nmcli -g GENERAL.CONNECTION device show "$iface" 2>/dev/null | head -n 1 | tr -d '\r' || true)
     conn=$(device_connection_name "$iface")
     if [[ -n "$conn" && "$conn" != "--" ]]; then
       nmcli connection modify "$conn" \
@@ -191,7 +193,9 @@ ensure_preferred_default() {
         ipv4.route-metric "$metric" \
         ipv6.route-metric "$metric" >/dev/null 2>&1 || true
       nmcli device reapply "$iface" >/dev/null 2>&1 || true
-      nmcli connection up "$conn" ifname "$iface" >/dev/null 2>&1 || true
+      if [[ "$state" != *"connected"* || "$current_conn" != "$conn" ]]; then
+        nmcli connection up "$conn" ifname "$iface" >/dev/null 2>&1 || true
+      fi
     fi
   fi
 

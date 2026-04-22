@@ -71,9 +71,11 @@ cleanup_stale_non_huawei_ips() {
 
 configure_nm_connection() {
   local iface="$1"
-  local conn
+  local conn state current_conn
 
   nmcli device set "$iface" managed yes >/dev/null 2>&1 || true
+  state=$(nmcli -g GENERAL.STATE device show "$iface" 2>/dev/null | head -n 1 | tr -d '\r' || true)
+  current_conn=$(nmcli -g GENERAL.CONNECTION device show "$iface" 2>/dev/null | head -n 1 | tr -d '\r' || true)
   conn=$(nmcli -g GENERAL.CONNECTION device show "$iface" 2>/dev/null | head -n 1 | tr -d '\r' || true)
   if [[ -z "$conn" || "$conn" == "--" ]]; then
     nmcli device connect "$iface" >/dev/null 2>&1 || true
@@ -89,6 +91,9 @@ configure_nm_connection() {
       connection.autoconnect-priority -50 \
       connection.autoconnect yes >/dev/null 2>&1 || true
     nmcli device reapply "$iface" >/dev/null 2>&1 || true
+    if [[ "$state" != *"connected"* || "$current_conn" != "$conn" ]]; then
+      nmcli connection up "$conn" ifname "$iface" >/dev/null 2>&1 || true
+    fi
   fi
 }
 
@@ -130,10 +135,12 @@ preferred_uplink_iface() {
 
 configure_uplink_connection() {
   local iface="$1"
-  local conn type metric
+  local conn type metric state current_conn
 
   [[ -n "$iface" ]] || return 0
   nmcli device set "$iface" managed yes >/dev/null 2>&1 || true
+  state=$(nmcli -g GENERAL.STATE device show "$iface" 2>/dev/null | head -n 1 | tr -d '\r' || true)
+  current_conn=$(nmcli -g GENERAL.CONNECTION device show "$iface" 2>/dev/null | head -n 1 | tr -d '\r' || true)
   conn=$(nmcli -g GENERAL.CONNECTION device show "$iface" 2>/dev/null | head -n 1 | tr -d '\r' || true)
   if [[ -z "$conn" || "$conn" == "--" ]]; then
     nmcli device connect "$iface" >/dev/null 2>&1 || true
@@ -156,7 +163,9 @@ configure_uplink_connection() {
       ipv4.route-metric "$metric" \
       ipv6.route-metric "$metric" >/dev/null 2>&1 || true
     nmcli device reapply "$iface" >/dev/null 2>&1 || true
-    nmcli connection up "$conn" ifname "$iface" >/dev/null 2>&1 || true
+    if [[ "$state" != *"connected"* || "$current_conn" != "$conn" ]]; then
+      nmcli connection up "$conn" ifname "$iface" >/dev/null 2>&1 || true
+    fi
   fi
 }
 
@@ -188,11 +197,41 @@ if systemctl is-active --quiet NetworkManager 2>/dev/null; then
 #!/bin/bash
 set -euo pipefail
 
+iface="${1:-}"
 action="${2:-}"
+preferred_file="/var/lib/partner-node/preferred-uplink"
+
+is_huawei_iface() {
+  local iface="$1"
+  local path vendor
+  [[ -n "$iface" ]] || return 1
+  path=$(readlink -f "/sys/class/net/$iface/device" 2>/dev/null || true)
+  while [[ -n "$path" && "$path" != "/" ]]; do
+    if [[ -f "$path/idVendor" ]]; then
+      vendor=$(tr '[:upper:]' '[:lower:]' < "$path/idVendor" 2>/dev/null || true)
+      [[ "$vendor" == "12d1" ]]
+      return
+    fi
+    path=$(dirname "$path")
+  done
+  return 1
+}
+
+preferred_uplink_iface() {
+  [[ -f "$preferred_file" ]] || return 1
+  head -n 1 "$preferred_file" | tr -d '\r'
+}
 
 case "$action" in
   up|down|dhcp4-change|dhcp6-change|connectivity-change|reapply|vpn-up|vpn-down|hostname)
-    /usr/local/bin/auto-modem-setup.sh >/dev/null 2>&1 || true
+    if [[ "$action" == "connectivity-change" || "$action" == "hostname" || "$action" == "vpn-up" || "$action" == "vpn-down" ]]; then
+      /usr/local/bin/auto-modem-setup.sh >/dev/null 2>&1 || true
+    else
+      preferred_iface="$(preferred_uplink_iface || true)"
+      if is_huawei_iface "$iface" || [[ -n "$preferred_iface" && "$iface" == "$preferred_iface" ]]; then
+        /usr/local/bin/auto-modem-setup.sh >/dev/null 2>&1 || true
+      fi
+    fi
     ;;
 esac
 DISPATCHER
