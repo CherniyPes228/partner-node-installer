@@ -281,9 +281,30 @@ function isTerminalFlashJob(job) {
 
 function flashJobTargetModem(job) {
   if (!job) return null
+  const jobNodeId = String(job.node_id || "").trim()
+  const stableKey = String(job.stable_key || "").trim()
+  const stableImei = stableKey.startsWith("imei:") ? normalizeDigits(stableKey.slice(5)) : ""
   const jobImei = String(job.imei || "").trim()
+  const normalizedJobImei = normalizeDigits(jobImei) || stableImei
   const jobModemId = String(job.modem_id || "").trim()
-  return modems.value.find((item) => (jobImei && String(item.imei || "").trim() === jobImei) || (jobModemId && String(item.id || "").trim() === jobModemId)) || null
+  const jobOrdinal = Number(job.ordinal || 0)
+  const sameNode = (item) => !jobNodeId || String(item?.node_id || "").trim() === jobNodeId
+  if (normalizedJobImei) {
+    const byImei = modems.value.find((item) => sameNode(item) && normalizeDigits(item?.imei) === normalizedJobImei)
+    if (byImei) return byImei
+  }
+  if (Number.isFinite(jobOrdinal) && jobOrdinal > 0) {
+    const byOrdinal = modems.value.find((item) => sameNode(item) && Number(localModemNumber(item) || 0) === jobOrdinal)
+    if (byOrdinal) return byOrdinal
+  }
+  if (jobModemId) {
+    return modems.value.find((item) => sameNode(item) && String(item.id || "").trim() === jobModemId) || null
+  }
+  return null
+}
+
+function normalizeDigits(value) {
+  return String(value || "").replace(/\D+/g, "")
 }
 
 function bytesLabel(value) {
@@ -415,6 +436,31 @@ function flashOverlayKeyForModem(modem) {
   return modem.imei || modem.id || ""
 }
 
+function flashOverlayKeyForJob(job, target = null) {
+  if (!job || typeof job !== "object") return target ? flashOverlayKeyForModem(target) : ""
+  const nodeId = String(job.node_id || target?.node_id || "").trim()
+  const stableKey = String(job.stable_key || "").trim()
+  if (nodeId && stableKey) return `${nodeId}:${stableKey}`
+  const imei = normalizeDigits(job.imei) || normalizeDigits(target?.imei)
+  if (nodeId && imei) return `${nodeId}:imei:${imei}`
+  const ordinal = Number(job.ordinal || 0)
+  if (nodeId && Number.isFinite(ordinal) && ordinal > 0) return `${nodeId}:ordinal:${ordinal}`
+  const modemId = String(job.modem_id || target?.id || "").trim()
+  if (nodeId && modemId) return `${nodeId}:${modemId}`
+  return target ? flashOverlayKeyForModem(target) : ""
+}
+
+function flashOverlayLabelForJob(job, target = null) {
+  const explicitOrdinal = Number(job?.ordinal || 0)
+  const targetOrdinal = Number(localModemNumber(target) || 0)
+  const ordinal = Number.isFinite(explicitOrdinal) && explicitOrdinal > 0
+    ? explicitOrdinal
+    : (Number.isFinite(targetOrdinal) && targetOrdinal > 0 ? targetOrdinal : "?")
+  const idLabel = String(job?.modem_id || target?.id || "modem").trim() || "modem"
+  const nodeLabel = String(job?.node_id || target?.node_id || "").trim()
+  return `#${ordinal} • ${idLabel}${nodeLabel ? ` • ${nodeLabel}` : ""}`
+}
+
 function rememberActiveFlashKey(key) {
   const normalized = String(key || "").trim()
   if (!normalized) return
@@ -513,15 +559,12 @@ function syncFlashOverlayFromOverview() {
 
   if (flashJob.value) {
     const target = flashJobTargetModem(flashJob.value)
-    const number = target ? localModemNumber(target) : (Number(flashJob.value.ordinal || 0) || "?")
-    const idLabel = target?.id || flashJob.value.modem_id || "modem"
-    const nodeLabel = target?.node_id || flashJob.value.node_id || ""
-    const label = `#${number} • ${idLabel}${nodeLabel ? ` • ${nodeLabel}` : ""}`
+    const label = flashOverlayLabelForJob(flashJob.value, target)
     if (isActiveFlashJob(flashJob.value)) {
-      const activeKey = flashOverlayKeyForModem(target || { node_id: nodeLabel, id: idLabel, imei: flashJob.value.imei || "" })
+      const activeKey = flashOverlayKeyForJob(flashJob.value, target)
       rememberActiveFlashKey(activeKey)
       storeDismissedFlashJobKey("")
-      debugFlashOverlay("sync:flashJob-active", { target_key: activeKey, target_id: idLabel, target_number: number, node_label: nodeLabel })
+      debugFlashOverlay("sync:flashJob-active", { target_key: activeKey, target_id: flashJob.value.modem_id || target?.id || "", target_number: Number(flashJob.value.ordinal || 0) || localModemNumber(target), node_label: flashJob.value.node_id || target?.node_id || "" })
       flashOverlay.value = {
         open: true,
         status: flashJob.value.status || "running",
@@ -566,7 +609,7 @@ function syncFlashOverlayFromOverview() {
 
   if (flashNotice.value && isTerminalFlashJob(flashNotice.value)) {
     const target = flashJobTargetModem(flashNotice.value)
-    const noticeOverlayKey = flashOverlayKeyForModem(target || { node_id: flashNotice.value.node_id || "", id: flashNotice.value.modem_id || "", imei: flashNotice.value.imei || "" })
+    const noticeOverlayKey = flashOverlayKeyForJob(flashNotice.value, target)
     if (!hasSeenActiveFlashKey(noticeOverlayKey) && (!overlayKey || overlayKey !== noticeOverlayKey)) {
       debugFlashOverlay("sync:ignore-terminal-notice-without-active-session", { notice_key: noticeOverlayKey })
       return
@@ -597,22 +640,20 @@ function syncFlashOverlayFromOverview() {
       }
       return
     }
-    const number = target ? localModemNumber(target) : (Number(flashNotice.value.ordinal || 0) || "?")
-    const idLabel = target?.id || flashNotice.value.modem_id || "modem"
-    const nodeLabel = target?.node_id || flashNotice.value.node_id || ""
+    const label = flashOverlayLabelForJob(flashNotice.value, target)
     flashOverlay.value = {
       open: true,
       status: flashNotice.value.status || "completed",
       stage: "",
       message: flashOverlayBody(flashNotice.value.status, flashNotice.value.message),
-      label: `#${number} • ${idLabel}${nodeLabel ? ` • ${nodeLabel}` : ""}`,
+      label,
       key: noticeOverlayKey,
       startedAt: flashOverlay.value.startedAt || Date.now(),
     }
     debugFlashOverlay("sync:show-terminal-notice", {
       notice_key: noticeOverlayKey,
-      target_id: idLabel,
-      target_number: number,
+      target_id: flashNotice.value.modem_id || target?.id || "",
+      target_number: Number(flashNotice.value.ordinal || 0) || localModemNumber(target),
       target_status: flashNotice.value.status || "completed",
       target_message: flashNotice.value.message || "",
     })

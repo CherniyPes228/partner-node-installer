@@ -200,6 +200,72 @@ def load_local_modem_registry():
         return {}, {}
 
 
+def merge_local_registry_entries(overview):
+    if not isinstance(overview, dict):
+        return overview
+
+    node_id = read_local_node_id().strip()
+    if not node_id:
+        node_id = str(overview.get("node_id") or "").strip()
+    if not node_id:
+        return overview
+
+    by_stable_key, flashed = load_local_modem_registry()
+    registry_items = overview.get("modem_registry")
+    if not isinstance(registry_items, list):
+        registry_items = []
+        overview["modem_registry"] = registry_items
+
+    existing = set()
+    for item in registry_items:
+        if not isinstance(item, dict):
+            continue
+        item_node = str(item.get("node_id") or item.get("last_seen_node_id") or "").strip()
+        item_imei = normalize_digits(item.get("imei"))
+        if item_node and item_imei:
+            existing.add(f"{item_node}:{item_imei}")
+
+    changed = False
+    for stable_key, raw_number in by_stable_key.items():
+        stable_key = str(stable_key or "").strip()
+        if not stable_key.startswith("imei:"):
+            continue
+        imei = normalize_digits(stable_key.split(":", 1)[1])
+        if not imei:
+            continue
+        registry_key = f"{node_id}:{imei}"
+        if registry_key in existing:
+            continue
+        try:
+            modem_number = int(raw_number or 0)
+        except Exception:
+            modem_number = 0
+        is_ready = bool(flashed.get(stable_key))
+        registry_items.append({
+            "node_id": node_id,
+            "imei": imei,
+            "modem_number": modem_number,
+            "provision_status": "ready" if is_ready else "requires_flash",
+            "provision_notes": "known modem for this node" if is_ready else "new modem assigned to this node; flash required",
+            "device_name": "E3372",
+            "software_version": TARGET_MAIN_VERSION if is_ready else "",
+            "webui_version": TARGET_WEBUI_LABEL if is_ready else "",
+            "last_seen_node_id": node_id,
+            "last_seen_modem_id": "",
+            "last_seen_at": "",
+        })
+        existing.add(registry_key)
+        changed = True
+
+    if changed:
+        registry_items.sort(key=lambda item: (
+            str(item.get("node_id") or item.get("last_seen_node_id") or "").strip(),
+            int(item.get("modem_number") or 0),
+            normalize_digits(item.get("imei")),
+        ))
+    return overview
+
+
 def load_local_flash_job():
     try:
         with open(LOCAL_FLASH_JOB_PATH, "r", encoding="utf-8") as fh:
@@ -802,6 +868,7 @@ def enrich_overview_with_local_modem_state(overview):
     if not isinstance(overview, dict):
         return overview
 
+    merge_local_registry_entries(overview)
     by_stable_key, flashed = load_local_modem_registry()
     registry_items = overview.get("modem_registry", []) or []
     registry_by_node_imei = {}
