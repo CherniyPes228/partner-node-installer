@@ -1187,7 +1187,7 @@ onBeforeUnmount(() => {
                     </Button>
                   </div>
                   <div class="text-xs text-muted-foreground">
-                    This runs the local helper at <span class="font-mono text-[11px] text-foreground">/usr/local/sbin/partner-node-update.sh</span> and may briefly restart partner services.
+                    This downloads the latest installer update script from GitHub and runs it on the node. partner services may briefly restart.
                   </div>
                   <div v-if="localUpdateMessage" class="rounded-xl border border-border/70 bg-muted/50 px-3 py-2 text-sm">{{ localUpdateMessage }}</div>
                 </div>

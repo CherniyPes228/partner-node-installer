@@ -15,6 +15,7 @@ PARTNER_KEY="${PARTNER_KEY:-}"
 UI_ASSET_BASE="${UI_ASSET_BASE:-https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/ui-dist}"
 PARTNER_NODE_UPDATE_PATH="${PARTNER_NODE_UPDATE_PATH:-/usr/local/sbin/partner-node-update.sh}"
 PARTNER_NODE_UPDATE_LOG="${PARTNER_NODE_UPDATE_LOG:-/var/log/partner-node/update.log}"
+PARTNER_NODE_UPDATE_URL="${PARTNER_NODE_UPDATE_URL:-https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/update.sh}"
 
 if [[ -z "${MAIN_SERVER}" || -z "${PARTNER_KEY}" ]]; then
   log_err "MAIN_SERVER and PARTNER_KEY must be set"
@@ -34,6 +35,7 @@ import json
 import mimetypes
 import os
 import re
+import shlex
 import sys
 import subprocess
 import threading
@@ -59,6 +61,7 @@ LOCAL_FLASH_NOTICE_PATH = os.environ.get("PARTNER_NODE_FLASH_NOTICE", "/var/lib/
 NODE_CREDENTIALS_PATH = os.environ.get("PARTNER_NODE_CREDENTIALS", "/var/lib/partner-node/node_credentials")
 UPDATE_HELPER_PATH = os.environ.get("PARTNER_NODE_UPDATE_PATH", "/usr/local/sbin/partner-node-update.sh")
 UPDATE_HELPER_LOG = os.environ.get("PARTNER_NODE_UPDATE_LOG", "/var/log/partner-node/update.log")
+UPDATE_SCRIPT_URL = os.environ.get("PARTNER_NODE_UPDATE_URL", "https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/update.sh")
 LOCAL_MODEM_STATE_PATHS = (
     LOCAL_MODEM_REGISTRY_PATH,
     LOCAL_FLASH_JOB_PATH,
@@ -320,10 +323,10 @@ def reset_local_modem_state():
 
 
 def local_update_already_running():
-    helper_name = os.path.basename(str(UPDATE_HELPER_PATH or "").strip()) or "partner-node-update.sh"
+    update_marker = str(UPDATE_SCRIPT_URL or "").strip() or "partner-node-installer/main/scripts/update.sh"
     try:
         result = subprocess.run(
-            ["pgrep", "-af", helper_name],
+            ["pgrep", "-af", update_marker],
             capture_output=True,
             text=True,
             check=False,
@@ -333,7 +336,7 @@ def local_update_already_running():
             line = line.strip()
             if not line:
                 continue
-            if UPDATE_HELPER_PATH in line or helper_name in line:
+            if update_marker in line:
                 return True
     except Exception:
         return False
@@ -341,19 +344,15 @@ def local_update_already_running():
 
 
 def start_local_update():
-    helper = str(UPDATE_HELPER_PATH or "").strip()
-    if not helper:
-        raise RuntimeError("update helper path is empty")
-    if not os.path.isfile(helper):
-        raise RuntimeError(f"update helper not found: {helper}")
-    if not os.access(helper, os.X_OK):
-        raise RuntimeError(f"update helper is not executable: {helper}")
+    update_url = str(UPDATE_SCRIPT_URL or "").strip()
+    if not update_url:
+        raise RuntimeError("update script url is empty")
     if local_update_already_running():
         return {
             "ok": True,
             "started": False,
             "already_running": True,
-            "helper_path": helper,
+            "update_url": update_url,
             "log_path": UPDATE_HELPER_LOG,
             "message": "node update is already running",
         }
@@ -364,8 +363,9 @@ def start_local_update():
         os.makedirs(log_dir, exist_ok=True)
 
     log_handle = open(log_path, "ab", buffering=0)
+    command = f"exec curl -fsSL {shlex.quote(update_url)} | /bin/bash"
     subprocess.Popen(
-        [helper],
+        ["/bin/bash", "-lc", command],
         cwd="/",
         stdout=log_handle,
         stderr=subprocess.STDOUT,
@@ -377,7 +377,7 @@ def start_local_update():
         "ok": True,
         "started": True,
         "already_running": False,
-        "helper_path": helper,
+        "update_url": update_url,
         "log_path": log_path,
         "message": "node update started; partner services may restart for 10-30 seconds",
     }
@@ -1545,6 +1545,7 @@ UI_LISTEN_ADDR="127.0.0.1"
 UI_PORT="${UI_PORT}"
 PARTNER_NODE_UPDATE_PATH="${PARTNER_NODE_UPDATE_PATH}"
 PARTNER_NODE_UPDATE_LOG="${PARTNER_NODE_UPDATE_LOG}"
+PARTNER_NODE_UPDATE_URL="${PARTNER_NODE_UPDATE_URL}"
 EOF
 
 cat > "/etc/systemd/system/${UI_SERVICE_NAME}.service" <<EOF
