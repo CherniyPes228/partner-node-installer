@@ -248,6 +248,7 @@ const activeFlashNodeId = computed(() => String(flashJob.value?.node_id || activ
 const TARGET_MAIN_VERSION = "22.200.15.00.00"
 const TARGET_WEBUI_VERSION = "17.100.13.113.03"
 const FLASH_DISMISS_STORAGE_KEY = "partner-node.flash.dismissed-job"
+const FLASH_DISMISS_OVERLAY_STORAGE_KEY = "partner-node.flash.dismissed-overlay"
 
 function loadDismissedFlashJobKey() {
   try {
@@ -263,6 +264,25 @@ function storeDismissedFlashJobKey(value) {
       window.localStorage.setItem(FLASH_DISMISS_STORAGE_KEY, value)
     } else {
       window.localStorage.removeItem(FLASH_DISMISS_STORAGE_KEY)
+    }
+  } catch {
+  }
+}
+
+function loadDismissedFlashOverlayKey() {
+  try {
+    return String(window.localStorage.getItem(FLASH_DISMISS_OVERLAY_STORAGE_KEY) || "").trim()
+  } catch {
+    return ""
+  }
+}
+
+function storeDismissedFlashOverlayKey(value) {
+  try {
+    if (value) {
+      window.localStorage.setItem(FLASH_DISMISS_OVERLAY_STORAGE_KEY, value)
+    } else {
+      window.localStorage.removeItem(FLASH_DISMISS_OVERLAY_STORAGE_KEY)
     }
   } catch {
   }
@@ -607,6 +627,9 @@ function closeFlashOverlay() {
   const noticeOverlayKey = flashOverlayKeyForJob(flashNotice.value, noticeTarget)
   if (flashNotice.value && isTerminalFlashJob(flashNotice.value) && noticeKey && (!overlayKey || overlayKey === noticeOverlayKey)) {
     storeDismissedFlashJobKey(noticeKey)
+    if (noticeOverlayKey) {
+      storeDismissedFlashOverlayKey(noticeOverlayKey)
+    }
   }
   forgetActiveFlashKey(overlayKey)
   debugFlashOverlay("closeFlashOverlay", { notice_key: noticeKey, notice_overlay_key: noticeOverlayKey, overlay_key: overlayKey })
@@ -629,6 +652,7 @@ function syncFlashOverlayFromOverview() {
       const activeKey = flashOverlayKeyForJob(flashJob.value, target)
       rememberActiveFlashKey(activeKey)
       storeDismissedFlashJobKey("")
+      storeDismissedFlashOverlayKey("")
       debugFlashOverlay("sync:flashJob-active", { target_key: activeKey, target_id: flashJob.value.modem_id || target?.id || "", target_number: Number(flashJob.value.ordinal || 0) || localModemNumber(target), node_label: flashJob.value.node_id || target?.node_id || "" })
       flashOverlay.value = {
         open: true,
@@ -646,6 +670,7 @@ function syncFlashOverlayFromOverview() {
   if (!hasActiveJob && activeRunningModem && activeRunningKey) {
     rememberActiveFlashKey(activeRunningKey)
     storeDismissedFlashJobKey("")
+    storeDismissedFlashOverlayKey("")
     debugFlashOverlay("sync:activeRunningModem-fallback", {
       target_key: activeRunningKey,
       target_id: activeRunningModem.id,
@@ -697,10 +722,11 @@ function syncFlashOverlayFromOverview() {
       return
     }
     const dismissedKey = loadDismissedFlashJobKey()
+    const dismissedOverlayKey = loadDismissedFlashOverlayKey()
     const currentKey = currentFlashStorageKey(flashNotice.value)
-    if (currentKey && currentKey === dismissedKey) {
+    if ((currentKey && currentKey === dismissedKey) || (noticeOverlayKey && noticeOverlayKey === dismissedOverlayKey)) {
       if (flashOverlay.value.open) {
-        debugFlashOverlay("sync:close-dismissed-terminal-notice", { notice_key: noticeOverlayKey, dismissed_key: dismissedKey })
+        debugFlashOverlay("sync:close-dismissed-terminal-notice", { notice_key: noticeOverlayKey, dismissed_key: dismissedKey, dismissed_overlay_key: dismissedOverlayKey })
         flashOverlay.value = { ...flashOverlay.value, open: false }
       }
       return
