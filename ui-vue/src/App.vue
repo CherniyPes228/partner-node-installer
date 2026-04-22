@@ -603,11 +603,13 @@ function openFlashOverlay(label, status = "queued", stage = "queued", message = 
 function closeFlashOverlay() {
   const noticeKey = currentFlashStorageKey(flashNotice.value)
   const overlayKey = String(flashOverlay.value.key || "").trim()
-  if (flashNotice.value && isTerminalFlashJob(flashNotice.value) && noticeKey && (!overlayKey || overlayKey === flashOverlayKeyForModem(flashJobTargetModem(flashNotice.value) || { node_id: flashNotice.value.node_id || "", id: flashNotice.value.modem_id || "", imei: flashNotice.value.imei || "" }))) {
+  const noticeTarget = flashJobTargetModem(flashNotice.value)
+  const noticeOverlayKey = flashOverlayKeyForJob(flashNotice.value, noticeTarget)
+  if (flashNotice.value && isTerminalFlashJob(flashNotice.value) && noticeKey && (!overlayKey || overlayKey === noticeOverlayKey)) {
     storeDismissedFlashJobKey(noticeKey)
   }
   forgetActiveFlashKey(overlayKey)
-  debugFlashOverlay("closeFlashOverlay", { notice_key: noticeKey, overlay_key: overlayKey })
+  debugFlashOverlay("closeFlashOverlay", { notice_key: noticeKey, notice_overlay_key: noticeOverlayKey, overlay_key: overlayKey })
   flashOverlay.value = { ...flashOverlay.value, open: false }
 }
 
