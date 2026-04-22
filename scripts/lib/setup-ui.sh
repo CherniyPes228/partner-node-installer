@@ -13,6 +13,8 @@ UI_PORT="${UI_PORT:-19090}"
 MAIN_SERVER="${MAIN_SERVER:-}"
 PARTNER_KEY="${PARTNER_KEY:-}"
 UI_ASSET_BASE="${UI_ASSET_BASE:-https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/ui-dist}"
+PARTNER_NODE_UPDATE_PATH="${PARTNER_NODE_UPDATE_PATH:-/usr/local/sbin/partner-node-update.sh}"
+PARTNER_NODE_UPDATE_LOG="${PARTNER_NODE_UPDATE_LOG:-/var/log/partner-node/update.log}"
 
 if [[ -z "${MAIN_SERVER}" || -z "${PARTNER_KEY}" ]]; then
   log_err "MAIN_SERVER and PARTNER_KEY must be set"
@@ -55,6 +57,8 @@ LOCAL_MODEM_REGISTRY_PATH = os.environ.get("PARTNER_NODE_MODEM_REGISTRY", "/var/
 LOCAL_FLASH_JOB_PATH = os.environ.get("PARTNER_NODE_FLASH_JOB", "/var/lib/partner-node/flash_job_state.json")
 LOCAL_FLASH_NOTICE_PATH = os.environ.get("PARTNER_NODE_FLASH_NOTICE", "/var/lib/partner-node/flash_notice_state.json")
 NODE_CREDENTIALS_PATH = os.environ.get("PARTNER_NODE_CREDENTIALS", "/var/lib/partner-node/node_credentials")
+UPDATE_HELPER_PATH = os.environ.get("PARTNER_NODE_UPDATE_PATH", "/usr/local/sbin/partner-node-update.sh")
+UPDATE_HELPER_LOG = os.environ.get("PARTNER_NODE_UPDATE_LOG", "/var/log/partner-node/update.log")
 LOCAL_MODEM_STATE_PATHS = (
     LOCAL_MODEM_REGISTRY_PATH,
     LOCAL_FLASH_JOB_PATH,
@@ -312,6 +316,70 @@ def reset_local_modem_state():
         "removed_files": removed,
         "server_registry_reset": server_reset,
         "restarted_service": "partner-node",
+    }
+
+
+def local_update_already_running():
+    helper_name = os.path.basename(str(UPDATE_HELPER_PATH or "").strip()) or "partner-node-update.sh"
+    try:
+        result = subprocess.run(
+            ["pgrep", "-af", helper_name],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+        for line in (result.stdout or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if UPDATE_HELPER_PATH in line or helper_name in line:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def start_local_update():
+    helper = str(UPDATE_HELPER_PATH or "").strip()
+    if not helper:
+        raise RuntimeError("update helper path is empty")
+    if not os.path.isfile(helper):
+        raise RuntimeError(f"update helper not found: {helper}")
+    if not os.access(helper, os.X_OK):
+        raise RuntimeError(f"update helper is not executable: {helper}")
+    if local_update_already_running():
+        return {
+            "ok": True,
+            "started": False,
+            "already_running": True,
+            "helper_path": helper,
+            "log_path": UPDATE_HELPER_LOG,
+            "message": "node update is already running",
+        }
+
+    log_path = str(UPDATE_HELPER_LOG or "").strip() or "/tmp/partner-node-update.log"
+    log_dir = os.path.dirname(log_path)
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
+
+    log_handle = open(log_path, "ab", buffering=0)
+    subprocess.Popen(
+        [helper],
+        cwd="/",
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    reset_overview_cache()
+    schedule_overview_refresh()
+    return {
+        "ok": True,
+        "started": True,
+        "already_running": False,
+        "helper_path": helper,
+        "log_path": log_path,
+        "message": "node update started; partner services may restart for 10-30 seconds",
     }
 
 
@@ -1427,6 +1495,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_text(500, str(err))
             return
 
+        if self.path == "/api/local/run-update":
+            try:
+                self._send_json(200, start_local_update())
+            except Exception as err:
+                self._send_text(500, str(err))
+            return
+
         if self.path != "/api/command":
             self._send_text(404, "not found")
             return
@@ -1468,6 +1543,8 @@ MAIN_SERVER="${MAIN_SERVER}"
 PARTNER_KEY="${PARTNER_KEY}"
 UI_LISTEN_ADDR="127.0.0.1"
 UI_PORT="${UI_PORT}"
+PARTNER_NODE_UPDATE_PATH="${PARTNER_NODE_UPDATE_PATH}"
+PARTNER_NODE_UPDATE_LOG="${PARTNER_NODE_UPDATE_LOG}"
 EOF
 
 cat > "/etc/systemd/system/${UI_SERVICE_NAME}.service" <<EOF

@@ -39,6 +39,7 @@ const timeoutSec = ref("120")
 const extraParams = ref("")
 const selectedNode = ref("all")
 const selectedModem = ref("all")
+const modemFleetScope = ref("current_node")
 const eventFeed = ref([])
 const localSpeedTest = ref(null)
 const localSpeedTestLoading = ref(false)
@@ -55,6 +56,8 @@ const flashSettings = ref({ auto_flash_enabled: true })
 const flashSettingsLoading = ref(false)
 const flashSettingsSaving = ref(false)
 const flashSettingsMessage = ref("")
+const localUpdateRunning = ref(false)
+const localUpdateMessage = ref("")
 const flashOverlay = ref({
   open: false,
   status: "",
@@ -129,12 +132,19 @@ const registryByModemKey = computed(() => {
 })
 const simCheckRequiredCount = computed(() => modemBilling.value.filter((item) => item.sim_needs_check || item.sim_quarantined).length)
 const activeNodeId = computed(() => selectedNode.value !== "all" ? selectedNode.value : (nodes.value[0]?.node_id || ""))
+const currentOverviewNodeId = computed(() => String(overview.value?.node_id || activeNodeId.value || "").trim())
 const currentNodeRegistry = computed(() => {
-  const nodeId = String(overview.value?.node_id || activeNodeId.value || "").trim()
+  const nodeId = currentOverviewNodeId.value
   if (!nodeId) return []
   return modemRegistry.value.filter((item) => String(item?.node_id || "").trim() === nodeId)
 })
 const filteredModems = computed(() => selectedNode.value === "all" ? modems.value : modems.value.filter((item) => item.node_id === selectedNode.value))
+const fleetModems = computed(() => {
+  if (modemFleetScope.value !== "current_node") return modems.value
+  const nodeId = currentOverviewNodeId.value
+  if (!nodeId) return modems.value
+  return modems.value.filter((item) => String(item?.node_id || "").trim() === nodeId)
+})
 const lastResults = computed(() => commandHistory.value.slice(0, 12))
 const activeFlashModem = computed(() => modems.value.find((item) => ["queued", "running", "verify"].includes(String(item.flash_status || "").toLowerCase())))
 const activeFlashNodeId = computed(() => String(flashJob.value?.node_id || activeFlashModem.value?.node_id || "").trim())
@@ -913,6 +923,33 @@ async function resetLocalNodeModemState() {
   }
 }
 
+async function runLocalNodeUpdate() {
+  if (localUpdateRunning.value) return
+  if (isActiveFlashJob(flashJob.value)) {
+    localUpdateMessage.value = "stop the active flash job first"
+    return
+  }
+  if (!window.confirm("Run in-place update on this node now? The same partner key and installed config will be reused. partner-node and the local UI may restart for a short time.")) return
+  localUpdateRunning.value = true
+  localUpdateMessage.value = ""
+  try {
+    const response = await fetch("/api/local/run-update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    })
+    if (!response.ok) throw new Error(await response.text())
+    const result = await response.json()
+    localUpdateMessage.value = result?.message || "node update started"
+    scheduleRefresh(5000)
+    window.setTimeout(() => { loadOverview(false) }, 12000)
+  } catch (error) {
+    localUpdateMessage.value = error instanceof Error ? error.message : "failed to start node update"
+  } finally {
+    localUpdateRunning.value = false
+  }
+}
+
 function quickAction(type) { sendCommand(type, "quick") }
 watch(selectedNode, () => { if (!filteredModems.value.some((item) => item.id === selectedModem.value)) selectedModem.value = "all" })
 watch([modems, overview], () => { syncFlashOverlayFromOverview() }, { deep: true })
@@ -999,7 +1036,7 @@ onBeforeUnmount(() => {
         </TabsContent>
 
         <TabsContent value="modems" class="space-y-4">
-          <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><CardTitle class="text-2xl">Modem fleet</CardTitle><CardDescription>Observed egress IP, node-local modem number, firmware baseline, SIM ICCID, and package usage.</CardDescription></CardHeader><CardContent class="p-4 sm:p-6"><div class="overflow-hidden rounded-[24px] border border-border/70"><Table><TableHeader><TableRow class="hover:bg-transparent"><TableHead>Node / Modem</TableHead><TableHead>Status</TableHead><TableHead>Observed IP</TableHead><TableHead>SIM</TableHead><TableHead>Operator</TableHead><TableHead>Tech</TableHead><TableHead>Signal</TableHead><TableHead>Sessions</TableHead><TableHead>Traffic</TableHead><TableHead>Plan</TableHead><TableHead>Action</TableHead></TableRow></TableHeader><TableBody><TableRow v-for="modem in modems" :key="`${modem.node_id}:${modem.id}`"><TableCell><div class="font-medium">#{{ localModemNumber(modem) }} • {{ modem.id }}</div><div class="text-xs text-muted-foreground">{{ modem.node_id }} • port {{ modem.port || "-" }}</div><div v-if="aliasUrlForModem(modem)" class="text-xs text-muted-foreground"><a :href="aliasUrlForModem(modem)" class="underline underline-offset-4" target="_blank" rel="noreferrer">{{ aliasUrlForModem(modem) }}</a></div><div class="text-xs text-muted-foreground">{{ modem.imei || "IMEI pending" }}</div><div class="text-xs text-muted-foreground">{{ modem.usb_mode || "mode pending" }}<span v-if="modem.usb_vendor_id || modem.usb_product_id"> • {{ modem.usb_vendor_id || "----" }}:{{ modem.usb_product_id || "----" }}</span></div><div v-if="modem.usb_mode === 'charging'" class="mt-1 text-[11px] text-amber-600">Recovery required: unplug and reconnect before retrying flash.</div></TableCell><TableCell><div class="space-y-1"><Badge :variant="tone(modem.state)" class="rounded-full capitalize">{{ modem.state || "unknown" }}</Badge><Badge v-if="modem.provision_status" :variant="modem.provision_status === 'ready' ? 'secondary' : modem.provision_status === 'requires_flash' ? 'destructive' : 'outline'" class="rounded-full">{{ modem.provision_status }}</Badge><Badge v-if="modem.sim_needs_check || modem.sim_quarantined" variant="destructive" class="rounded-full">SIM check required</Badge></div><div v-if="modem.flash_message" class="mt-2 text-[11px] text-muted-foreground">{{ modem.flash_message }}</div></TableCell><TableCell class="font-mono text-xs">{{ modem.wan_ip || "-" }}</TableCell><TableCell class="text-xs"><div class="font-mono">{{ modem.iccid || "-" }}</div><div class="text-muted-foreground">{{ modem.client_eligible === false ? "blocked for clients" : "eligible" }}</div></TableCell><TableCell>{{ modem.operator || "-" }}</TableCell><TableCell>{{ modem.technology || "-" }}</TableCell><TableCell><div class="flex items-center gap-2"><Signal class="h-4 w-4 text-muted-foreground" /><span>{{ modem.signal_strength ?? "-" }}</span></div><div class="mt-1 text-[11px] text-muted-foreground">{{ modem.software_version || "-" }} / {{ modem.webui_version || "-" }}</div></TableCell><TableCell>{{ modem.active_sessions || 0 }}</TableCell><TableCell class="text-xs text-muted-foreground"><div>In: {{ bytesLabel(modem.traffic_bytes_in) }}</div><div>Out: {{ bytesLabel(modem.traffic_bytes_out) }}</div></TableCell><TableCell class="text-xs text-muted-foreground"><template v-if="billingByKey[`${modem.node_id}:${modem.id}`]"><div>{{ billingByKey[`${modem.node_id}:${modem.id}`].plan_kind === 'unlimited' ? 'Unlimited' : `${billingByKey[`${modem.node_id}:${modem.id}`].traffic_limit_gb || '-'} GB` }}</div><div>Cycle: {{ bytesLabel(billingByKey[`${modem.node_id}:${modem.id}`].cycle_used_bytes) }}</div></template><span v-else>-</span></TableCell><TableCell class="text-xs"><Button v-if="canFlashLiveModem(modem)" variant="destructive" size="sm" class="rounded-full" :disabled="registrySaving === ((modem.node_id && modem.imei) ? `${modem.node_id}:${modem.imei}` : (modem.imei || `${modem.node_id}:${modem.id}`))" @click="flashLiveModem(modem)">Flash now</Button><span v-else class="text-muted-foreground">-</span></TableCell></TableRow><TableRow v-if="!modems.length"><TableCell colspan="11" class="py-10 text-center text-muted-foreground">No modems have been discovered yet.</TableCell></TableRow></TableBody></Table></div></CardContent></Card>
+          <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><div class="flex flex-wrap items-start justify-between gap-3"><div><CardTitle class="text-2xl">Modem fleet</CardTitle><CardDescription>Observed egress IP, node-local modem number, firmware baseline, SIM ICCID, and package usage.</CardDescription></div><div class="w-full max-w-[220px] space-y-2"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Scope</div><Select v-model="modemFleetScope"><SelectTrigger class="rounded-2xl"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="current_node">This node only</SelectItem><SelectItem value="all_nodes">All nodes</SelectItem></SelectContent></Select></div></div></CardHeader><CardContent class="p-4 sm:p-6"><div class="overflow-hidden rounded-[24px] border border-border/70"><Table><TableHeader><TableRow class="hover:bg-transparent"><TableHead>Node / Modem</TableHead><TableHead>Status</TableHead><TableHead>Observed IP</TableHead><TableHead>SIM</TableHead><TableHead>Operator</TableHead><TableHead>Tech</TableHead><TableHead>Signal</TableHead><TableHead>Sessions</TableHead><TableHead>Traffic</TableHead><TableHead>Plan</TableHead><TableHead>Action</TableHead></TableRow></TableHeader><TableBody><TableRow v-for="modem in fleetModems" :key="`${modem.node_id}:${modem.id}`"><TableCell><div class="font-medium">#{{ localModemNumber(modem) }} • {{ modem.id }}</div><div class="text-xs text-muted-foreground">{{ modem.node_id }} • port {{ modem.port || "-" }}</div><div v-if="aliasUrlForModem(modem)" class="text-xs text-muted-foreground"><a :href="aliasUrlForModem(modem)" class="underline underline-offset-4" target="_blank" rel="noreferrer">{{ aliasUrlForModem(modem) }}</a></div><div class="text-xs text-muted-foreground">{{ modem.imei || "IMEI pending" }}</div><div class="text-xs text-muted-foreground">{{ modem.usb_mode || "mode pending" }}<span v-if="modem.usb_vendor_id || modem.usb_product_id"> • {{ modem.usb_vendor_id || "----" }}:{{ modem.usb_product_id || "----" }}</span></div><div v-if="modem.usb_mode === 'charging'" class="mt-1 text-[11px] text-amber-600">Recovery required: unplug and reconnect before retrying flash.</div></TableCell><TableCell><div class="space-y-1"><Badge :variant="tone(modem.state)" class="rounded-full capitalize">{{ modem.state || "unknown" }}</Badge><Badge v-if="modem.provision_status" :variant="modem.provision_status === 'ready' ? 'secondary' : modem.provision_status === 'requires_flash' ? 'destructive' : 'outline'" class="rounded-full">{{ modem.provision_status }}</Badge><Badge v-if="modem.sim_needs_check || modem.sim_quarantined" variant="destructive" class="rounded-full">SIM check required</Badge></div><div v-if="modem.flash_message" class="mt-2 text-[11px] text-muted-foreground">{{ modem.flash_message }}</div></TableCell><TableCell class="font-mono text-xs">{{ modem.wan_ip || "-" }}</TableCell><TableCell class="text-xs"><div class="font-mono">{{ modem.iccid || "-" }}</div><div class="text-muted-foreground">{{ modem.client_eligible === false ? "blocked for clients" : "eligible" }}</div></TableCell><TableCell>{{ modem.operator || "-" }}</TableCell><TableCell>{{ modem.technology || "-" }}</TableCell><TableCell><div class="flex items-center gap-2"><Signal class="h-4 w-4 text-muted-foreground" /><span>{{ modem.signal_strength ?? "-" }}</span></div><div class="mt-1 text-[11px] text-muted-foreground">{{ modem.software_version || "-" }} / {{ modem.webui_version || "-" }}</div></TableCell><TableCell>{{ modem.active_sessions || 0 }}</TableCell><TableCell class="text-xs text-muted-foreground"><div>In: {{ bytesLabel(modem.traffic_bytes_in) }}</div><div>Out: {{ bytesLabel(modem.traffic_bytes_out) }}</div></TableCell><TableCell class="text-xs text-muted-foreground"><template v-if="billingByKey[`${modem.node_id}:${modem.id}`]"><div>{{ billingByKey[`${modem.node_id}:${modem.id}`].plan_kind === 'unlimited' ? 'Unlimited' : `${billingByKey[`${modem.node_id}:${modem.id}`].traffic_limit_gb || '-'} GB` }}</div><div>Cycle: {{ bytesLabel(billingByKey[`${modem.node_id}:${modem.id}`].cycle_used_bytes) }}</div></template><span v-else>-</span></TableCell><TableCell class="text-xs"><Button v-if="canFlashLiveModem(modem)" variant="destructive" size="sm" class="rounded-full" :disabled="registrySaving === ((modem.node_id && modem.imei) ? `${modem.node_id}:${modem.imei}` : (modem.imei || `${modem.node_id}:${modem.id}`))" @click="flashLiveModem(modem)">Flash now</Button><span v-else class="text-muted-foreground">-</span></TableCell></TableRow><TableRow v-if="!fleetModems.length"><TableCell colspan="11" class="py-10 text-center text-muted-foreground">{{ modemFleetScope === 'current_node' ? 'No modems discovered on this node yet.' : 'No modems have been discovered yet.' }}</TableCell></TableRow></TableBody></Table></div></CardContent></Card>
           <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(400px,0.8fr)]">
             <div class="space-y-4">
               <Card class="rounded-[28px] border-border/70 shadow-sm"><CardHeader class="border-b border-border/60 pb-5"><div class="flex flex-wrap items-start justify-between gap-3"><div><CardTitle class="text-2xl">Provisioning registry</CardTitle><CardDescription>Every modem gets a stable number by IMEI, so you can label the hardware and keep tracking it after moving to another USB port.</CardDescription></div><Button variant="destructive" class="rounded-full" :disabled="registryResetting || isActiveFlashJob(flashJob)" @click="resetLocalNodeModemState()">{{ registryResetting ? "Clearing..." : "Clear node memory" }}</Button></div></CardHeader><CardContent class="space-y-4 p-4 sm:p-6"><div v-if="registryMessage" class="rounded-xl border border-border/70 bg-muted/50 px-3 py-2 text-sm">{{ registryMessage }}</div><div class="rounded-xl border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">This clears the local node modem registry, active flash state, and requests a server-side reset for this node. Use it before retesting the same modem as new hardware.</div><div v-for="item in currentNodeRegistry" :key="`${item.node_id}:${item.imei}`" class="rounded-[24px] border border-border/70 p-4 space-y-3"><div class="flex flex-wrap items-start justify-between gap-3"><div><div class="flex flex-wrap items-center gap-2"><div class="font-medium">Modem #{{ item.modem_number }}</div><Badge :variant="item.provision_status === 'ready' ? 'secondary' : item.provision_status === 'requires_flash' ? 'destructive' : 'outline'" class="rounded-full">{{ item.provision_status || "new" }}</Badge></div><div class="mt-1 font-mono text-xs text-muted-foreground">{{ item.imei }}</div><div class="mt-1 text-xs text-muted-foreground">{{ item.device_name || "-" }} • {{ item.hardware_version || "-" }}</div><div class="mt-1 text-xs text-muted-foreground">{{ item.software_version || "-" }} • {{ item.webui_version || "-" }}</div></div><div class="text-right text-xs text-muted-foreground"><div>{{ item.last_seen_node_id || "-" }} • {{ item.last_seen_modem_id || "-" }}</div><div>{{ relativeTime(item.last_seen_at) }}</div></div></div><div class="rounded-xl border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground">Safe flash is limited to supported E3372h-153 baselines from the approved firmware list. Unknown revisions stay blocked.</div><div class="flex flex-wrap gap-3"><Button variant="outline" class="rounded-full" :disabled="registrySaving === `${item.node_id}:${item.imei}`" @click="updateModemRegistry(item, 'ready')">Mark ready</Button><Button variant="secondary" class="rounded-full" :disabled="registrySaving === `${item.node_id}:${item.imei}`" @click="updateModemRegistry(item, 'requires_flash')">Needs flash</Button><Button v-if="item.provision_status === 'requires_flash'" variant="destructive" class="rounded-full" :disabled="registrySaving === `${item.node_id}:${item.imei}` || !item.last_seen_node_id || !item.last_seen_modem_id" @click="flashRegistryModem(item)">Flash now</Button></div></div><div v-if="!currentNodeRegistry.length" class="rounded-[24px] border border-dashed border-border/70 px-4 py-10 text-center text-sm text-muted-foreground">No provisioned modems yet. Plug them one by one to assign a stable modem number.</div></CardContent></Card>
@@ -1046,6 +1083,26 @@ onBeforeUnmount(() => {
                     Current mode: {{ flashSettings.auto_flash_enabled ? "new modems may start provisioning automatically" : "automatic provisioning is paused" }}
                   </div>
                   <div v-if="flashSettingsMessage" class="rounded-xl border border-border/70 bg-muted/50 px-3 py-2 text-sm">{{ flashSettingsMessage }}</div>
+                </div>
+                <div class="rounded-2xl border border-border/70 p-4 space-y-3">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Node update</div>
+                      <div class="mt-1 text-sm text-muted-foreground">Refresh node-agent, local UI, flash helpers, and systemd units without a full reinstall. The current partner key and installed config stay in place.</div>
+                    </div>
+                    <Button
+                      variant="outline"
+                      class="rounded-full"
+                      :disabled="localUpdateRunning || isActiveFlashJob(flashJob)"
+                      @click="runLocalNodeUpdate()"
+                    >
+                      {{ localUpdateRunning ? "Starting..." : "Update node" }}
+                    </Button>
+                  </div>
+                  <div class="text-xs text-muted-foreground">
+                    This runs the local helper at <span class="font-mono text-[11px] text-foreground">/usr/local/sbin/partner-node-update.sh</span> and may briefly restart partner services.
+                  </div>
+                  <div v-if="localUpdateMessage" class="rounded-xl border border-border/70 bg-muted/50 px-3 py-2 text-sm">{{ localUpdateMessage }}</div>
                 </div>
                 <div class="rounded-2xl border border-border/70 p-4 space-y-3">
                   <div class="flex items-center justify-between gap-3">

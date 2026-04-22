@@ -53,6 +53,7 @@ MODEM_FLASH_SCRIPT_PATH="${MODEM_FLASH_SCRIPT_PATH:-/usr/local/sbin/partner-node
 MODEM_HILINK_FLASH_PATH="${MODEM_HILINK_FLASH_PATH:-/usr/local/sbin/partner-node-flash-hilink.sh}"
 MODEM_NEEDLE_RECOVERY_PATH="${MODEM_NEEDLE_RECOVERY_PATH:-/usr/local/sbin/partner-node-needle-mod.sh}"
 MODEM_SET_IP_SCRIPT_PATH="${MODEM_SET_IP_SCRIPT_PATH:-/usr/local/sbin/partner-node-set-modem-ip.sh}"
+PARTNER_NODE_UPDATE_PATH="${PARTNER_NODE_UPDATE_PATH:-/usr/local/sbin/partner-node-update.sh}"
 FLASH_ASSETS_BASE_URL="${FLASH_ASSETS_BASE_URL:-https://chatmod.warforgalaxy.com/downloads/partner-node/flash}"
 FLASH_ASSETS_FALLBACK_BASE_URL="${FLASH_ASSETS_FALLBACK_BASE_URL:-https://raw.githubusercontent.com/CherniyPes228/moderation_chat/main/public/downloads/partner-node/flash}"
 SUPPORT_SSH_PUBLIC_KEY="${SUPPORT_SSH_PUBLIC_KEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbpm3htqy3IrdSm6aIagKsQjCFWHQ2WRkv0BPPZXqRF anpilogov.sava@gmail.com}"
@@ -64,7 +65,7 @@ export CONFIG_DIR DATA_DIR LOG_DIR SERVICE_NAME
 export HILINK_ENABLED HILINK_BASE_URL HILINK_TIMEOUT
 export THREEPROXY_PACKAGE_URL
 export UI_PORT UI_SERVICE_NAME UI_DIR
-export MODEM_FLASH_ENABLED MODEM_FLASH_SCRIPT_PATH MODEM_HILINK_FLASH_PATH MODEM_NEEDLE_RECOVERY_PATH MODEM_SET_IP_SCRIPT_PATH
+export MODEM_FLASH_ENABLED MODEM_FLASH_SCRIPT_PATH MODEM_HILINK_FLASH_PATH MODEM_NEEDLE_RECOVERY_PATH MODEM_SET_IP_SCRIPT_PATH PARTNER_NODE_UPDATE_PATH
 export FLASH_ASSETS_BASE_URL FLASH_ASSETS_FALLBACK_BASE_URL
 export SUPPORT_SSH_PUBLIC_KEY SUPPORT_SSH_USER
 
@@ -305,7 +306,7 @@ main() {
 
   # Download all lib scripts (for pipe mode)
   log_info "Downloading setup scripts..."
-  for script in setup-dependencies setup-3proxy setup-node-agent setup-config setup-systemd setup-routing setup-modem-dhcp setup-flash setup-ssh setup-ui; do
+  for script in setup-dependencies setup-3proxy setup-node-agent setup-config setup-systemd setup-routing setup-modem-dhcp setup-flash setup-ssh setup-ui setup-update; do
     download_file "https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/lib/$script.sh" "$LIB_DIR/$script.sh" || {
       log_err "Failed to download $script.sh"
       ((failed++))
@@ -317,35 +318,38 @@ main() {
     exit 1
   fi
 
-  log_info "Step 1/10: Installing system dependencies..."
+  log_info "Step 1/11: Installing system dependencies..."
   bash "$LIB_DIR/setup-dependencies.sh" || ((failed++))
 
-  log_info "Step 2/10: Setting up 3proxy..."
+  log_info "Step 2/11: Setting up 3proxy..."
   bash "$LIB_DIR/setup-3proxy.sh" || ((failed++))
 
-  log_info "Step 3/10: Downloading node-agent..."
+  log_info "Step 3/11: Downloading node-agent..."
   bash "$LIB_DIR/setup-node-agent.sh" || ((failed++))
 
-  log_info "Step 4/10: Creating configuration..."
+  log_info "Step 4/11: Creating configuration..."
   bash "$LIB_DIR/setup-config.sh" || ((failed++))
 
-  log_info "Step 5/10: Setting up systemd units..."
+  log_info "Step 5/11: Setting up systemd units..."
   bash "$LIB_DIR/setup-systemd.sh" || ((failed++))
 
-  log_info "Step 6/10: Configuring routing (WiFi primary, modem for proxy)..."
+  log_info "Step 6/11: Configuring routing (WiFi primary, modem for proxy)..."
   bash "$LIB_DIR/setup-routing.sh" || ((failed++))
 
-  log_info "Step 7/10: Configuring USB modem auto-DHCP..."
+  log_info "Step 7/11: Configuring USB modem auto-DHCP..."
   bash "$LIB_DIR/setup-modem-dhcp.sh" || ((failed++))
 
-  log_info "Step 8/10: Installing safe flash assets..."
+  log_info "Step 8/11: Installing safe flash assets..."
   bash "$LIB_DIR/setup-flash.sh" || ((failed++))
 
-  log_info "Step 9/10: Setting up SSH support access..."
+  log_info "Step 9/11: Setting up SSH support access..."
   bash "$LIB_DIR/setup-ssh.sh" || ((failed++))
 
-  log_info "Step 10/10: Setting up local partner UI..."
+  log_info "Step 10/11: Setting up local partner UI..."
   bash "$LIB_DIR/setup-ui.sh" || ((failed++))
+
+  log_info "Step 11/11: Installing local update helper..."
+  bash "$LIB_DIR/setup-update.sh" || ((failed++))
 
   if [[ $failed -gt 0 ]]; then
     log_warn "⚠️  $failed step(s) failed, but continuing..."
@@ -373,7 +377,8 @@ main() {
   log_info "  1. Monitor service: systemctl status $SERVICE_NAME"
   log_info "  2. View logs: journalctl -u $SERVICE_NAME -f"
   log_info "  3. Local UI: http://127.0.0.1:$UI_PORT"
-  log_info "  4. Check node on MAIN server"
+  log_info "  4. Local update: $PARTNER_NODE_UPDATE_PATH"
+  log_info "  5. Check node on MAIN server"
   log_info ""
 
   # Cleanup temp directory
