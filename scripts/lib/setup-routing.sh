@@ -44,6 +44,10 @@ setup_routing() {
 # Enforce WiFi as default route (not modem)
 # This script runs every minute via cron and can also be triggered on demand.
 
+set -euo pipefail
+
+PREFERRED_UPLINK_FILE="/var/lib/partner-node/preferred-uplink"
+
 is_huawei_iface() {
   local iface="$1"
   local path vendor
@@ -81,6 +85,122 @@ cleanup_stale_non_huawei_ips() {
   done
 }
 
+list_non_huawei_ifaces() {
+  local iface
+  for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}'); do
+    [[ "$iface" == "lo" ]] && continue
+    if ! is_huawei_iface "$iface"; then
+      echo "$iface"
+    fi
+  done
+}
+
+device_connection_name() {
+  local iface="$1"
+  nmcli -g GENERAL.CONNECTION device show "$iface" 2>/dev/null | head -n 1 | tr -d '\r' || true
+}
+
+device_type() {
+  local iface="$1"
+  nmcli -g GENERAL.TYPE device show "$iface" 2>/dev/null | head -n 1 | tr -d '\r' || true
+}
+
+device_gateway() {
+  local iface="$1"
+  local gateway
+  gateway=$(nmcli -g IP4.GATEWAY device show "$iface" 2>/dev/null | head -n 1 | tr -d '\r' || true)
+  if [[ -z "$gateway" ]]; then
+    gateway=$(ip route show dev "$iface" 2>/dev/null | awk '/^default via / {print $3; exit}')
+  fi
+  echo "$gateway"
+}
+
+remember_preferred_uplink() {
+  local iface="$1"
+  mkdir -p "$(dirname "$PREFERRED_UPLINK_FILE")"
+  printf '%s\n' "$iface" > "$PREFERRED_UPLINK_FILE"
+}
+
+load_preferred_uplink() {
+  [[ -f "$PREFERRED_UPLINK_FILE" ]] || return 1
+  head -n 1 "$PREFERRED_UPLINK_FILE" | tr -d '\r'
+}
+
+preferred_uplink_iface() {
+  local iface remembered
+
+  iface=$(ip route show default 2>/dev/null | awk '/^default/ {for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i+1); exit }}')
+  if [[ -n "$iface" ]] && ! is_huawei_iface "$iface"; then
+    echo "$iface"
+    return 0
+  fi
+
+  remembered=$(load_preferred_uplink || true)
+  if [[ -n "$remembered" && -d "/sys/class/net/$remembered" ]] && ! is_huawei_iface "$remembered"; then
+    echo "$remembered"
+    return 0
+  fi
+
+  if command -v nmcli >/dev/null 2>&1; then
+    iface=$(nmcli -t -f DEVICE,TYPE,STATE device status 2>/dev/null | awk -F: '$2 == "wifi" && $3 == "connected" { print $1; exit }')
+    if [[ -n "$iface" ]] && ! is_huawei_iface "$iface"; then
+      echo "$iface"
+      return 0
+    fi
+
+    iface=$(nmcli -t -f DEVICE,TYPE,STATE device status 2>/dev/null | awk -F: '$2 == "ethernet" && $3 == "connected" { print $1; exit }')
+    if [[ -n "$iface" ]] && ! is_huawei_iface "$iface"; then
+      echo "$iface"
+      return 0
+    fi
+  fi
+
+  for iface in $(list_non_huawei_ifaces); do
+    if ip -4 -o addr show dev "$iface" scope global 2>/dev/null | grep -q 'inet '; then
+      echo "$iface"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+ensure_preferred_default() {
+  local iface="$1"
+  local conn type metric gateway
+
+  [[ -n "$iface" ]] || return 0
+  remember_preferred_uplink "$iface"
+
+  type=$(device_type "$iface")
+  case "$type" in
+    wifi) metric=40 ;;
+    ethernet) metric=60 ;;
+    *) metric=80 ;;
+  esac
+
+  if command -v nmcli >/dev/null 2>&1; then
+    nmcli device set "$iface" managed yes >/dev/null 2>&1 || true
+    conn=$(device_connection_name "$iface")
+    if [[ -n "$conn" && "$conn" != "--" ]]; then
+      nmcli connection modify "$conn" \
+        connection.autoconnect yes \
+        connection.autoconnect-priority 100 \
+        ipv4.never-default no \
+        ipv6.never-default no \
+        ipv4.route-metric "$metric" \
+        ipv6.route-metric "$metric" >/dev/null 2>&1 || true
+      nmcli device reapply "$iface" >/dev/null 2>&1 || true
+      nmcli connection up "$conn" ifname "$iface" >/dev/null 2>&1 || true
+    fi
+  fi
+
+  gateway=$(device_gateway "$iface")
+  if [[ -n "$gateway" ]]; then
+    ip route replace default via "$gateway" dev "$iface" metric "$metric" 2>/dev/null || true
+  fi
+}
+
 cleanup_stale_non_huawei_ips
 
 for iface in $(list_huawei_ifaces); do
@@ -91,10 +211,10 @@ for iface in $(list_huawei_ifaces); do
   done < <(ip route show default dev "$iface" 2>/dev/null || true)
 done
 
-# Ensure at least one WiFi/Ethernet default route exists
-if ! ip route show 2>/dev/null | grep -q 'default via'; then
-  # Try to add WiFi default route (192.168.0.1 is common gateway)
-  ip route add default via 192.168.0.1 2>/dev/null || true
+# Reassert the preferred non-Huawei uplink route after cleaning modem defaults.
+uplink_iface=$(preferred_uplink_iface || true)
+if [[ -n "$uplink_iface" ]]; then
+  ensure_preferred_default "$uplink_iface"
 fi
 
 # Build source-based routing for modem-side IPs so 3proxy traffic bound to

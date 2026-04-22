@@ -142,7 +142,7 @@ main() {
   local failed=0
 
   log_info "Downloading update helpers..."
-  for script in setup-dependencies setup-node-agent setup-systemd setup-flash setup-ui setup-update; do
+  for script in setup-dependencies setup-node-agent setup-systemd setup-routing setup-modem-dhcp setup-flash setup-ui setup-update; do
     download_file "${INSTALLER_RAW_BASE_URL}/scripts/lib/${script}.sh" "${LIB_DIR}/${script}.sh" || {
       log_err "Failed to download ${script}.sh"
       ((failed++))
@@ -165,25 +165,31 @@ main() {
   export FLASH_ASSETS_FALLBACK_BASE_URL="${FLASH_ASSETS_FALLBACK_BASE_URL:-https://raw.githubusercontent.com/CherniyPes228/moderation_chat/main/public/downloads/partner-node/flash}"
 
   if [[ "${WITH_DEPENDENCIES}" == "true" ]]; then
-    log_info "Step 1/6: Refreshing system dependencies..."
+    log_info "Step 1/8: Refreshing system dependencies..."
     bash "$LIB_DIR/setup-dependencies.sh" || ((failed++))
   else
-    log_info "Step 1/6: Skipping dependency refresh (use --with-dependencies to include it)"
+    log_info "Step 1/8: Skipping dependency refresh (use --with-dependencies to include it)"
   fi
 
-  log_info "Step 2/6: Updating node-agent..."
+  log_info "Step 2/8: Updating node-agent..."
   bash "$LIB_DIR/setup-node-agent.sh" || ((failed++))
 
-  log_info "Step 3/6: Refreshing systemd units..."
+  log_info "Step 3/8: Refreshing systemd units..."
   bash "$LIB_DIR/setup-systemd.sh" || ((failed++))
 
-  log_info "Step 4/6: Updating flash assets and helper scripts..."
+  log_info "Step 4/8: Refreshing routing enforcement..."
+  bash "$LIB_DIR/setup-routing.sh" || ((failed++))
+
+  log_info "Step 5/8: Refreshing USB modem routing policy..."
+  bash "$LIB_DIR/setup-modem-dhcp.sh" || ((failed++))
+
+  log_info "Step 6/8: Updating flash assets and helper scripts..."
   bash "$LIB_DIR/setup-flash.sh" || ((failed++))
 
-  log_info "Step 5/6: Updating local partner UI..."
+  log_info "Step 7/8: Updating local partner UI..."
   bash "$LIB_DIR/setup-ui.sh" || ((failed++))
 
-  log_info "Step 6/6: Refreshing local update helper..."
+  log_info "Step 8/8: Refreshing local update helper..."
   bash "$LIB_DIR/setup-update.sh" || ((failed++))
 
   log_info "Restarting services..."
