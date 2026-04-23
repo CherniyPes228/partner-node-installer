@@ -802,6 +802,108 @@ def detect_local_live_modems(node_id, registry_by_node_imei, by_stable_key, flas
     return placeholders
 
 
+def modem_identity_key(modem, fallback_node_id=""):
+    if not isinstance(modem, dict):
+        return ""
+    node_id = str(modem.get("node_id") or fallback_node_id or "").strip()
+    imei = normalize_digits(modem.get("imei"))
+    if node_id and imei:
+        return f"{node_id}:{imei}"
+    modem_id = str(modem.get("id") or "").strip()
+    if node_id and modem_id:
+        return f"{node_id}:{modem_id}"
+    if imei:
+        return f"imei:{imei}"
+    if modem_id:
+        return f"id:{modem_id}"
+    return ""
+
+
+def modem_state_rank(value):
+    state = str(value or "").strip().lower()
+    if state == "ready":
+        return 5
+    if state == "degraded":
+        return 4
+    if state == "detected":
+        return 3
+    if state in ("queued", "running", "verify"):
+        return 2
+    if state == "offline":
+        return 1
+    return 0
+
+
+def modem_runtime_score(modem):
+    if not isinstance(modem, dict):
+        return 0
+    score = 0
+    for field in ("wan_ip", "operator", "technology", "imei", "iccid", "local_base_url", "software_version", "webui_version"):
+        if str(modem.get(field) or "").strip():
+            score += 1
+    for field in ("signal_strength", "port", "active_sessions", "traffic_bytes_in", "traffic_bytes_out", "ordinal", "modem_number"):
+        try:
+            if int(modem.get(field) or 0) != 0:
+                score += 1
+        except Exception:
+            pass
+    return score
+
+
+def merge_modem_snapshots(current, candidate):
+    preferred, secondary = current, candidate
+    current_rank = modem_state_rank(current.get("state"))
+    candidate_rank = modem_state_rank(candidate.get("state"))
+    if candidate_rank > current_rank:
+        preferred, secondary = candidate, current
+    elif candidate_rank == current_rank:
+        current_score = modem_runtime_score(current)
+        candidate_score = modem_runtime_score(candidate)
+        if candidate_score > current_score:
+            preferred, secondary = candidate, current
+        elif candidate_score == current_score:
+            candidate_ordinal = int(candidate.get("ordinal") or 0)
+            current_ordinal = int(current.get("ordinal") or 0)
+            if candidate_ordinal > 0 and current_ordinal > 0 and candidate_ordinal < current_ordinal:
+                preferred, secondary = candidate, current
+
+    merged = dict(secondary or {})
+    merged.update(preferred or {})
+    for field in ("wan_ip", "operator", "technology", "imei", "iccid", "local_base_url", "software_version", "webui_version", "hardware_version", "device_name", "usb_mode"):
+        if not str(merged.get(field) or "").strip() and str(secondary.get(field) or "").strip():
+            merged[field] = secondary.get(field)
+    for field in ("signal_strength", "port", "active_sessions", "traffic_bytes_in", "traffic_bytes_out", "ordinal", "modem_number"):
+        try:
+            if int(merged.get(field) or 0) == 0 and int(secondary.get(field) or 0) != 0:
+                merged[field] = secondary.get(field)
+        except Exception:
+            pass
+    return merged
+
+
+def dedupe_modem_rows(modems, fallback_node_id=""):
+    if not isinstance(modems, list) or not modems:
+        return []
+    deduped = []
+    index_by_key = {}
+    for modem in modems:
+        if not isinstance(modem, dict):
+            continue
+        item = dict(modem)
+        if fallback_node_id and not str(item.get("node_id") or "").strip():
+            item["node_id"] = fallback_node_id
+        key = modem_identity_key(item, fallback_node_id)
+        if not key:
+            deduped.append(item)
+            continue
+        if key in index_by_key:
+            deduped[index_by_key[key]] = merge_modem_snapshots(deduped[index_by_key[key]], item)
+            continue
+        index_by_key[key] = len(deduped)
+        deduped.append(item)
+    return deduped
+
+
 def finalize_overview_shape(overview):
     overview.setdefault("partner_key", PARTNER_KEY)
     overview.setdefault("main_server", MAIN_SERVER)
@@ -812,6 +914,12 @@ def finalize_overview_shape(overview):
     overview.setdefault("flash_notice", {})
     nodes = overview.get("nodes") or []
     modems = overview.get("modems") or []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("node_id") or "").strip()
+        node["modems"] = dedupe_modem_rows(node.get("modems") or [], node_id)
+    modems = dedupe_modem_rows(modems or [])
     if not modems:
         flattened = []
         seen = set()
@@ -830,8 +938,8 @@ def finalize_overview_shape(overview):
                 seen.add(key)
                 flattened.append(modem)
         if flattened:
-            modems = flattened
-            overview["modems"] = flattened
+            modems = dedupe_modem_rows(flattened)
+    overview["modems"] = modems
     if nodes:
         best_node = None
         for node in nodes:

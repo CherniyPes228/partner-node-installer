@@ -110,7 +110,7 @@ const runbookChecks = [
 
 const summary = computed(() => overview.value?.summary || {})
 const nodes = computed(() => Array.isArray(overview.value?.nodes) ? overview.value.nodes : [])
-const modems = computed(() => Array.isArray(overview.value?.modems) ? overview.value.modems : [])
+const modems = computed(() => dedupeOverviewModems(Array.isArray(overview.value?.modems) ? overview.value.modems : []))
 const commandHistory = computed(() => Array.isArray(overview.value?.last_results) ? overview.value.last_results : [])
 const partnerBalance = computed(() => overview.value?.partner_balance || {})
 const flashJob = computed(() => (overview.value && typeof overview.value.flash_job === "object" && overview.value.flash_job) ? overview.value.flash_job : null)
@@ -342,6 +342,87 @@ function flashJobTargetModem(job) {
 
 function normalizeDigits(value) {
   return String(value || "").replace(/\D+/g, "")
+}
+
+function overviewModemIdentityKey(modem) {
+  const nodeId = String(modem?.node_id || "").trim()
+  const imei = normalizeDigits(modem?.imei)
+  if (nodeId && imei) return `${nodeId}:imei:${imei}`
+  const modemId = String(modem?.id || "").trim()
+  if (nodeId && modemId) return `${nodeId}:${modemId}`
+  return imei || modemId
+}
+
+function overviewModemStateRank(value) {
+  const state = String(value || "").trim().toLowerCase()
+  if (state === "ready") return 5
+  if (state === "degraded") return 4
+  if (state === "detected") return 3
+  if (["queued", "running", "verify"].includes(state)) return 2
+  if (state === "offline") return 1
+  return 0
+}
+
+function overviewModemRuntimeScore(modem) {
+  let score = 0
+  for (const field of ["wan_ip", "operator", "technology", "imei", "iccid", "local_base_url", "software_version", "webui_version"]) {
+    if (String(modem?.[field] || "").trim()) score += 1
+  }
+  for (const field of ["signal_strength", "port", "active_sessions", "traffic_bytes_in", "traffic_bytes_out", "ordinal", "modem_number"]) {
+    const value = Number(modem?.[field] || 0)
+    if (Number.isFinite(value) && value !== 0) score += 1
+  }
+  return score
+}
+
+function mergeOverviewModem(current, candidate) {
+  let preferred = current
+  let secondary = candidate
+  const currentRank = overviewModemStateRank(current?.state)
+  const candidateRank = overviewModemStateRank(candidate?.state)
+  if (candidateRank > currentRank) {
+    preferred = candidate
+    secondary = current
+  } else if (candidateRank === currentRank && overviewModemRuntimeScore(candidate) > overviewModemRuntimeScore(current)) {
+    preferred = candidate
+    secondary = current
+  }
+
+  const merged = { ...secondary, ...preferred }
+  for (const field of ["wan_ip", "operator", "technology", "imei", "iccid", "local_base_url", "software_version", "webui_version", "hardware_version", "device_name", "usb_mode"]) {
+    if (!String(merged?.[field] || "").trim() && String(secondary?.[field] || "").trim()) {
+      merged[field] = secondary[field]
+    }
+  }
+  for (const field of ["signal_strength", "port", "active_sessions", "traffic_bytes_in", "traffic_bytes_out", "ordinal", "modem_number"]) {
+    const currentValue = Number(merged?.[field] || 0)
+    const secondaryValue = Number(secondary?.[field] || 0)
+    if ((!Number.isFinite(currentValue) || currentValue === 0) && Number.isFinite(secondaryValue) && secondaryValue !== 0) {
+      merged[field] = secondary[field]
+    }
+  }
+  return merged
+}
+
+function dedupeOverviewModems(items) {
+  if (!Array.isArray(items) || !items.length) return []
+  const deduped = []
+  const indexByKey = new Map()
+  for (const item of items) {
+    const key = overviewModemIdentityKey(item)
+    if (!key) {
+      deduped.push(item)
+      continue
+    }
+    if (!indexByKey.has(key)) {
+      indexByKey.set(key, deduped.length)
+      deduped.push(item)
+      continue
+    }
+    const idx = indexByKey.get(key)
+    deduped[idx] = mergeOverviewModem(deduped[idx], item)
+  }
+  return deduped
 }
 
 function bytesLabel(value) {
