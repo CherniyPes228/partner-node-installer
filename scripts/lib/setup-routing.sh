@@ -215,25 +215,25 @@ preferred_uplink_iface() {
   local iface remembered current_default
 
   iface=$(connected_iface_by_type "ethernet")
-  if [[ -n "${iface}" && -d "/sys/class/net/${iface}" && ! is_huawei_iface "${iface}" ]]; then
+  if [[ -n "${iface}" && -d "/sys/class/net/${iface}" ]] && ! is_huawei_iface "${iface}"; then
     echo "${iface}"
     return 0
   fi
 
   iface=$(connected_iface_by_type "wifi")
-  if [[ -n "${iface}" && -d "/sys/class/net/${iface}" && ! is_huawei_iface "${iface}" ]]; then
+  if [[ -n "${iface}" && -d "/sys/class/net/${iface}" ]] && ! is_huawei_iface "${iface}"; then
     echo "${iface}"
     return 0
   fi
 
   remembered=$(load_preferred_uplink || true)
-  if [[ -n "${remembered}" && -d "/sys/class/net/${remembered}" && ! is_huawei_iface "${remembered}" ]] && iface_has_ipv4 "${remembered}"; then
+  if [[ -n "${remembered}" && -d "/sys/class/net/${remembered}" ]] && ! is_huawei_iface "${remembered}" && iface_has_ipv4 "${remembered}"; then
     echo "${remembered}"
     return 0
   fi
 
   current_default=$(ip route show default 2>/dev/null | awk '/^default/ {for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i+1); exit }}')
-  if [[ -n "${current_default}" && -d "/sys/class/net/${current_default}" && ! is_huawei_iface "${current_default}" ]] && iface_has_ipv4 "${current_default}"; then
+  if [[ -n "${current_default}" && -d "/sys/class/net/${current_default}" ]] && ! is_huawei_iface "${current_default}" && iface_has_ipv4 "${current_default}"; then
     echo "${current_default}"
     return 0
   fi
