@@ -1052,6 +1052,16 @@ def enrich_overview_with_local_modem_state(overview):
             for field in ("imei", "serial_number", "device_name", "iccid", "hardware_version", "software_version", "webui_version", "product_family", "local_base_url"):
                 if str(info.get(field) or "").strip():
                     modem[field] = info[field]
+            for field in ("wan_ip", "operator", "technology", "local_interface", "local_ip"):
+                if str(info.get(field) or "").strip():
+                    modem[field] = info[field]
+            for field in ("signal_strength", "active_sessions"):
+                try:
+                    value = int(info.get(field) or 0)
+                except Exception:
+                    value = 0
+                if value != 0:
+                    modem[field] = value
 
         imei = normalize_digits(modem.get("imei"))
         stable_key = f"imei:{imei}" if imei else ""

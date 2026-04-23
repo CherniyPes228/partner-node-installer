@@ -26,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/CherniyPes228/partner-node-installe
 
 source "$LIB_DIR/common.sh"
 
-BINARY_URL="${BINARY_URL:-https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.15}"
+BINARY_URL="${BINARY_URL:-https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.16}"
 INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local/bin}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/partner-node}"
 SERVICE_NAME="${SERVICE_NAME:-partner-node}"
