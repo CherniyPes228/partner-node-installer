@@ -31,8 +31,8 @@ const loading = ref(false)
 const refreshError = ref("")
 const commandMessage = ref("")
 const quickMessage = ref("")
-const realtimeState = ref("offline")
-const realtimeNote = ref("Waiting for local node overview...")
+const realtimeState = ref("polling")
+const realtimeNote = ref("Using stable local polling for modem state.")
 const lastRealtimeAt = ref("")
 const commandType = ref("self_check")
 const timeoutSec = ref("120")
@@ -79,11 +79,7 @@ const speedTestTargets = [
   { value: "custom", label: "Custom URL" },
 ]
 
-let ws = null
-let wsUrl = ""
-let reconnectTimer = null
 let refreshTimer = null
-let fallbackTimer = null
 let localOverviewTimer = null
 let billingTimer = null
 let overviewRequestInFlight = false
@@ -860,41 +856,8 @@ function pushEvent(type, payload = {}) {
   lastRealtimeAt.value = next.ts
 }
 
-function clearReconnect() { if (reconnectTimer) { window.clearTimeout(reconnectTimer); reconnectTimer = null } }
 function clearRefreshTimer() { if (refreshTimer) { window.clearTimeout(refreshTimer); refreshTimer = null } }
 function scheduleRefresh(delay = 400) { clearRefreshTimer(); refreshTimer = window.setTimeout(() => loadOverview(false), delay) }
-
-function closeRealtime() {
-  clearReconnect()
-  if (ws) {
-    ws.onopen = null; ws.onmessage = null; ws.onclose = null; ws.onerror = null; ws.close(); ws = null
-  }
-}
-
-function buildPartnerWsUrl() {
-  const partnerKey = overview.value?.partner_key
-  const mainServer = overview.value?.main_server
-  if (!partnerKey || !mainServer) return ""
-  try {
-    const url = new URL(mainServer)
-    url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
-    url.pathname = "/ws/partner"
-    url.searchParams.set("partner_key", partnerKey)
-    return url.toString()
-  } catch { return "" }
-}
-
-function connectRealtime() {
-  const nextUrl = buildPartnerWsUrl()
-  if (!nextUrl) { realtimeState.value = "disconnected"; realtimeNote.value = "Main server for realtime is not known yet."; return }
-  if (ws && ws.readyState === WebSocket.OPEN && wsUrl === nextUrl) return
-  closeRealtime(); wsUrl = nextUrl; realtimeState.value = "connecting"; realtimeNote.value = "Connecting websocket to the main server..."
-  ws = new WebSocket(nextUrl)
-  ws.onopen = () => { realtimeState.value = "active"; realtimeNote.value = "Live channel is active, the screen updates from events."; pushEvent("realtime.connected", { partner_key: overview.value?.partner_key || "" }) }
-  ws.onmessage = (event) => { try { const data = JSON.parse(event.data); pushEvent(data.type || "event", data.payload || {}) } catch { pushEvent("event.raw", { text: String(event.data || "") }) } scheduleRefresh(400) }
-  ws.onerror = () => { realtimeState.value = "warning"; realtimeNote.value = "Realtime channel reported an error, waiting to reconnect." }
-  ws.onclose = () => { ws = null; realtimeState.value = "fallback"; realtimeNote.value = "Realtime channel is reconnecting; local polling stays active."; clearReconnect(); reconnectTimer = window.setTimeout(() => connectRealtime(), 2500) }
-}
 
 async function loadOverview(showLoader = true) {
   if (overviewRequestInFlight) return
@@ -906,17 +869,17 @@ async function loadOverview(showLoader = true) {
     if (!response.ok) throw new Error(await response.text())
     const data = await response.json()
     overview.value = data
+    lastRealtimeAt.value = new Date().toISOString()
+    realtimeState.value = "polling"
+    realtimeNote.value = "Using stable local polling for modem state."
     modemRegistry.value = Array.isArray(data.modem_registry) ? data.modem_registry : []
     if (selectedNode.value === "all" && data.nodes?.length === 1) selectedNode.value = data.nodes[0].node_id
     if (selectedNode.value !== "all" && !data.nodes?.some((item) => item.node_id === selectedNode.value)) selectedNode.value = data.nodes?.[0]?.node_id || "all"
     if (selectedModem.value !== "all" && !filteredModems.value.some((item) => item.id === selectedModem.value)) selectedModem.value = "all"
-    connectRealtime()
   } catch (error) {
     refreshError.value = error instanceof Error ? error.message : "refresh failed"
-    if (realtimeState.value !== "active") {
-      realtimeState.value = "fallback"
-      realtimeNote.value = "Local overview request failed, retrying with periodic polling."
-    }
+    realtimeState.value = "warning"
+    realtimeNote.value = "Overview refresh failed, keeping the latest stable snapshot."
   } finally {
     overviewRequestInFlight = false
     loading.value = false
@@ -1296,21 +1259,13 @@ onMounted(() => {
   if (activeTab.value === "modems") loadModemBilling()
   localOverviewTimer = window.setInterval(() => {
     loadOverview(false)
-  }, 4000)
+  }, 5000)
   billingTimer = window.setInterval(() => {
     if (activeTab.value === "modems") loadModemBilling()
-  }, 20000)
-  fallbackTimer = window.setInterval(() => {
-    if (realtimeState.value !== "active") loadOverview(false)
-  }, 15000)
+  }, 30000)
 })
 onBeforeUnmount(() => {
-  closeRealtime()
   clearRefreshTimer()
-  if (fallbackTimer) {
-    window.clearInterval(fallbackTimer)
-    fallbackTimer = null
-  }
   if (localOverviewTimer) {
     window.clearInterval(localOverviewTimer)
     localOverviewTimer = null
@@ -1332,15 +1287,15 @@ onBeforeUnmount(() => {
               <h1 class="text-3xl font-semibold tracking-tight sm:text-4xl">Partner fleet console for all assigned nodes</h1>
               <p class="max-w-3xl text-sm leading-6 text-muted-foreground sm:text-base">
                 This local admin panel shows the entire fleet for the current `partner_key`: nodes, modems, observed egress IP,
-                traffic by modem, active clients, recent commands, and live events from the main server.
+                traffic by modem, active clients, recent commands, and stable snapshot refresh from the main server.
               </p>
             </div>
           </div>
           <div class="grid gap-3 sm:grid-cols-2 xl:min-w-[520px]">
             <div class="rounded-[26px] border border-border/70 bg-card/80 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Partner Key</div><div class="mt-2 font-mono text-sm">{{ overview?.partner_key || "-" }}</div></div>
             <div class="rounded-[26px] border border-border/70 bg-card/80 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Main Server</div><div class="mt-2 break-all font-mono text-sm">{{ overview?.main_server || "-" }}</div></div>
-            <div class="rounded-[26px] border border-border/70 bg-card/80 p-4"><div class="flex items-center justify-between gap-3"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Realtime</div><Badge :variant="tone(realtimeState)" class="rounded-full capitalize">{{ realtimeState }}</Badge></div><div class="mt-2 text-sm text-muted-foreground">{{ realtimeNote }}</div></div>
-            <div class="rounded-[26px] border border-border/70 bg-card/80 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Last live event</div><div class="mt-2 text-sm font-medium">{{ lastRealtimeAt ? relativeTime(lastRealtimeAt) : "-" }}</div></div>
+            <div class="rounded-[26px] border border-border/70 bg-card/80 p-4"><div class="flex items-center justify-between gap-3"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Refresh Mode</div><Badge :variant="tone(realtimeState)" class="rounded-full capitalize">{{ realtimeState }}</Badge></div><div class="mt-2 text-sm text-muted-foreground">{{ realtimeNote }}</div></div>
+            <div class="rounded-[26px] border border-border/70 bg-card/80 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Last snapshot</div><div class="mt-2 text-sm font-medium">{{ lastRealtimeAt ? relativeTime(lastRealtimeAt) : "-" }}</div></div>
           </div>
         </div>
       </header>
