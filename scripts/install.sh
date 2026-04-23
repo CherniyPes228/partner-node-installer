@@ -11,7 +11,7 @@ set -euo pipefail
 PARTNER_KEY=""
 COUNTRY=""
 MAIN_SERVER=""
-BINARY_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.20"
+BINARY_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.21"
 BINARY_URL_EXPLICIT="false"
 DOCTOR_BINARY_URL=""
 MODEM_ROTATION_METHOD="auto" # auto|mmcli|api
@@ -48,6 +48,28 @@ NC="\033[0m"
 log_info() { echo -e "${GREEN}[INFO]${NC} $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_err()  { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+
+run_remote_installer_lib() {
+  local script_name="$1"
+  local tmpdir script_base
+
+  script_base="https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/lib"
+  tmpdir="$(mktemp -d)"
+
+  if ! curl -fsSL "${script_base}/common.sh" -o "${tmpdir}/common.sh"; then
+    rm -rf "${tmpdir}"
+    return 1
+  fi
+  if ! curl -fsSL "${script_base}/${script_name}" -o "${tmpdir}/${script_name}"; then
+    rm -rf "${tmpdir}"
+    return 1
+  fi
+  if ! bash "${tmpdir}/${script_name}"; then
+    rm -rf "${tmpdir}"
+    return 1
+  fi
+  rm -rf "${tmpdir}"
+}
 
 usage() {
   cat <<EOF
@@ -169,7 +191,7 @@ install_from_binary() {
     exit 1
   fi
 
-  if [[ "${arch}" != "amd64" && "${url}" == "https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.20" ]]; then
+  if [[ "${arch}" != "amd64" && "${url}" == "https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.21" ]]; then
     log_err "Default binary is amd64-only. Provide --binary-url for ${arch}."
     exit 1
   fi
@@ -668,8 +690,8 @@ write_systemd_unit() {
   cat > "${service_path}" <<EOF
 [Unit]
 Description=Partner Node Agent
-After=network-online.target
-Wants=network-online.target
+After=network-online.target partner-node-network-reconcile.service
+Wants=network-online.target partner-node-network-reconcile.service
 
 [Service]
 Type=simple
@@ -2016,13 +2038,11 @@ main() {
   write_config
   harden_secret_permissions
   configure_firewall || true
-
-  # Setup routing (WiFi primary, modem for proxy only)
-  log_info "Setting up network routing..."
-  local routing_script_url="https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/setup-routing.sh"
-  bash <(curl -fsSL "$routing_script_url") || log_warn "Routing setup failed, continuing..."
+  run_remote_installer_lib "setup-headless-hardening.sh" || log_warn "Headless hardening failed, continuing..."
 
   write_systemd_unit
+  run_remote_installer_lib "setup-routing.sh" || log_warn "Routing policy setup failed, continuing..."
+  run_remote_installer_lib "setup-modem-dhcp.sh" || log_warn "NetworkManager dispatcher setup failed, continuing..."
   write_flash_script
   start_service
   write_partner_ui_files

@@ -35,7 +35,7 @@ source "$LIB_DIR/common.sh"
 PARTNER_KEY=""
 MAIN_SERVER=""
 COUNTRY="${COUNTRY:-}"
-BINARY_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.20"
+BINARY_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.21"
 INSTALL_PREFIX="/usr/local/bin"
 CONFIG_DIR="/etc/partner-node"
 DATA_DIR="/var/lib/partner-node"
@@ -306,7 +306,7 @@ main() {
 
   # Download all lib scripts (for pipe mode)
   log_info "Downloading setup scripts..."
-  for script in setup-dependencies setup-3proxy setup-node-agent setup-config setup-systemd setup-routing setup-modem-dhcp setup-flash setup-ssh setup-ui setup-update; do
+  for script in setup-dependencies setup-headless-hardening setup-3proxy setup-node-agent setup-config setup-systemd setup-routing setup-modem-dhcp setup-flash setup-ssh setup-ui setup-update; do
     download_file "https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/lib/$script.sh" "$LIB_DIR/$script.sh" || {
       log_err "Failed to download $script.sh"
       ((failed++))
@@ -318,37 +318,40 @@ main() {
     exit 1
   fi
 
-  log_info "Step 1/11: Installing system dependencies..."
+  log_info "Step 1/12: Installing system dependencies..."
   bash "$LIB_DIR/setup-dependencies.sh" || ((failed++))
 
-  log_info "Step 2/11: Setting up 3proxy..."
+  log_info "Step 2/12: Applying headless appliance hardening..."
+  bash "$LIB_DIR/setup-headless-hardening.sh" || ((failed++))
+
+  log_info "Step 3/12: Setting up 3proxy..."
   bash "$LIB_DIR/setup-3proxy.sh" || ((failed++))
 
-  log_info "Step 3/11: Downloading node-agent..."
+  log_info "Step 4/12: Downloading node-agent..."
   bash "$LIB_DIR/setup-node-agent.sh" || ((failed++))
 
-  log_info "Step 4/11: Creating configuration..."
+  log_info "Step 5/12: Creating configuration..."
   bash "$LIB_DIR/setup-config.sh" || ((failed++))
 
-  log_info "Step 5/11: Setting up systemd units..."
+  log_info "Step 6/12: Setting up systemd units..."
   bash "$LIB_DIR/setup-systemd.sh" || ((failed++))
 
-  log_info "Step 6/11: Configuring routing (WiFi primary, modem for proxy)..."
+  log_info "Step 7/12: Configuring routing (Ethernet primary, Wi-Fi fallback, modem for proxy)..."
   bash "$LIB_DIR/setup-routing.sh" || ((failed++))
 
-  log_info "Step 7/11: Configuring USB modem auto-DHCP..."
+  log_info "Step 8/12: Configuring NetworkManager dispatcher for modem/uplink reconcile..."
   bash "$LIB_DIR/setup-modem-dhcp.sh" || ((failed++))
 
-  log_info "Step 8/11: Installing safe flash assets..."
+  log_info "Step 9/12: Installing safe flash assets..."
   bash "$LIB_DIR/setup-flash.sh" || ((failed++))
 
-  log_info "Step 9/11: Setting up SSH support access..."
+  log_info "Step 10/12: Setting up SSH support access..."
   bash "$LIB_DIR/setup-ssh.sh" || ((failed++))
 
-  log_info "Step 10/11: Setting up local partner UI..."
+  log_info "Step 11/12: Setting up local partner UI..."
   bash "$LIB_DIR/setup-ui.sh" || ((failed++))
 
-  log_info "Step 11/11: Installing local update helper..."
+  log_info "Step 12/12: Installing local update helper..."
   bash "$LIB_DIR/setup-update.sh" || ((failed++))
 
   if [[ $failed -gt 0 ]]; then

@@ -18,19 +18,10 @@ setup_systemd() {
 
   mkdir -p /etc/systemd/system "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR" /etc/3proxy /var/log/3proxy
 
-  # Create wrapper script for node-agent (ensures WiFi is default route)
-  log_info "Creating node-agent wrapper script (for routing fix)"
+  # Keep a wrapper for compatibility, but do not mutate networking on service start.
+  log_info "Creating node-agent wrapper script"
   cat > $INSTALL_PREFIX/node-agent-wrapper.sh <<WRAPPER
 #!/bin/bash
-# Pre-start hook for node-agent.
-# Keep this conservative: only run the Huawei-only enforcement helper when present.
-if [[ -x /usr/local/bin/auto-modem-setup.sh ]]; then
-  /usr/local/bin/auto-modem-setup.sh >/dev/null 2>&1 || true
-fi
-if [[ -x /usr/local/bin/enforce-wifi-routing.sh ]]; then
-  /usr/local/bin/enforce-wifi-routing.sh >/dev/null 2>&1 || true
-fi
-
 exec /usr/local/bin/node-agent "\$@"
 WRAPPER
 
@@ -42,8 +33,8 @@ WRAPPER
 [Unit]
 Description=Partner Node Agent
 Documentation=https://github.com/CherniyPes228/partner-node
-After=network.target
-Wants=network-online.target
+After=network-online.target partner-node-network-reconcile.service
+Wants=network-online.target partner-node-network-reconcile.service
 
 [Service]
 Type=simple
