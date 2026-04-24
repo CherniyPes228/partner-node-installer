@@ -57,6 +57,7 @@ MODEM_ALIAS_PREFIX = os.environ.get("MODEM_ALIAS_PREFIX", "172.31")
 MODEM_ALIAS_PORT = int(os.environ.get("MODEM_ALIAS_PORT", "80"))
 CONFIG_PATH = os.environ.get("PARTNER_NODE_CONFIG", "/etc/partner-node/config.yaml")
 LOCAL_MODEM_REGISTRY_PATH = os.environ.get("PARTNER_NODE_MODEM_REGISTRY", "/var/lib/partner-node/modem_ordinal_registry.json")
+LOCAL_MODEM_USAGE_PATH = os.environ.get("PARTNER_NODE_MODEM_USAGE", "/var/lib/partner-node/modem_usage.json")
 LOCAL_FLASH_JOB_PATH = os.environ.get("PARTNER_NODE_FLASH_JOB", "/var/lib/partner-node/flash_job_state.json")
 LOCAL_FLASH_NOTICE_PATH = os.environ.get("PARTNER_NODE_FLASH_NOTICE", "/var/lib/partner-node/flash_notice_state.json")
 NODE_CREDENTIALS_PATH = os.environ.get("PARTNER_NODE_CREDENTIALS", "/var/lib/partner-node/node_credentials")
@@ -73,7 +74,8 @@ TARGET_WEBUI_VERSION = "17.100.13.113.03"
 TARGET_WEBUI_LABEL = "17.100.13.01.03"
 MAIN_SERVER_TIMEOUT = float(os.environ.get("PARTNER_MAIN_SERVER_TIMEOUT", "5"))
 HILINK_PROBE_TIMEOUT = float(os.environ.get("PARTNER_HILINK_PROBE_TIMEOUT", "1.5"))
-HILINK_INFO_CACHE_TTL = float(os.environ.get("PARTNER_HILINK_INFO_CACHE_TTL", "5"))
+HILINK_INFO_CACHE_TTL = float(os.environ.get("PARTNER_HILINK_INFO_CACHE_TTL", "15"))
+HILINK_INFO_STALE_TTL = float(os.environ.get("PARTNER_HILINK_INFO_STALE_TTL", "30"))
 OVERVIEW_CACHE_TTL = float(os.environ.get("PARTNER_OVERVIEW_CACHE_TTL", "3"))
 LOCAL_HILINK_IFACE_PREFIXES = ("enx", "enp", "usb", "wwan", "eth")
 
@@ -277,6 +279,330 @@ def load_local_modem_registry():
         return numbers if isinstance(numbers, dict) else {}, flashed if isinstance(flashed, dict) else {}
     except Exception:
         return {}, {}
+
+
+def utc_now_iso():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def month_start_iso():
+    return time.strftime("%Y-%m-01T00:00:00Z", time.gmtime())
+
+
+def normalize_cycle_mode(value):
+    value = str(value or "").strip().lower()
+    return value if value == "rolling_30_days" else "day_of_month"
+
+
+def normalize_plan_kind(value):
+    value = str(value or "").strip().lower()
+    return value if value == "unlimited" else "metered"
+
+
+def parse_float_or_none(value):
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def parse_int_or_none(value):
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except Exception:
+        return None
+
+
+def modem_usage_key(node_id, modem_id="", imei=""):
+    node_id = str(node_id or "").strip()
+    imei = normalize_digits(imei)
+    modem_id = str(modem_id or "").strip()
+    if node_id and imei:
+        return f"{node_id}:imei:{imei}"
+    if node_id and modem_id:
+        return f"{node_id}:id:{modem_id}"
+    return ""
+
+
+def read_local_modem_usage_state():
+    try:
+        with open(LOCAL_MODEM_USAGE_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+    modems = data.get("modems")
+    if not isinstance(modems, dict):
+        modems = {}
+    data["version"] = 1
+    data["modems"] = modems
+    return data
+
+
+def write_local_modem_usage_state(state):
+    os.makedirs(os.path.dirname(LOCAL_MODEM_USAGE_PATH), exist_ok=True)
+    tmp = f"{LOCAL_MODEM_USAGE_PATH}.tmp.{int(time.time() * 1000000)}"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(state, fh, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(tmp, LOCAL_MODEM_USAGE_PATH)
+
+
+def live_modem_identity(modem):
+    if not isinstance(modem, dict):
+        return "", "", "", 0
+    node_id = str(modem.get("node_id") or read_local_node_id() or "").strip()
+    modem_id = str(modem.get("id") or modem.get("modem_id") or "").strip()
+    imei = normalize_digits(modem.get("imei"))
+    try:
+        ordinal = int(modem.get("modem_number") or modem.get("ordinal") or 0)
+    except Exception:
+        ordinal = 0
+    return node_id, modem_id, imei, ordinal
+
+
+def find_live_modem(overview, node_id, modem_id):
+    for modem in (overview.get("modems") or []):
+        if not isinstance(modem, dict):
+            continue
+        if str(modem.get("node_id") or "").strip() == node_id and str(modem.get("id") or "").strip() == modem_id:
+            return modem
+    for node in (overview.get("nodes") or []):
+        if not isinstance(node, dict) or str(node.get("node_id") or "").strip() != node_id:
+            continue
+        for modem in (node.get("modems") or []):
+            if isinstance(modem, dict) and str(modem.get("id") or "").strip() == modem_id:
+                item = dict(modem)
+                item["node_id"] = node_id
+                return item
+    return {}
+
+
+def ensure_usage_record(state, modem):
+    node_id, modem_id, imei, ordinal = live_modem_identity(modem)
+    key = modem_usage_key(node_id, modem_id, imei)
+    if not key:
+        return None
+    records = state.setdefault("modems", {})
+    record = records.get(key)
+    if not isinstance(record, dict):
+        record = {
+            "key": key,
+            "node_id": node_id,
+            "modem_id": modem_id,
+            "plan_kind": "metered",
+            "cycle_mode": "day_of_month",
+            "cycle_anchor_at": month_start_iso(),
+            "cycle_start_at": month_start_iso(),
+            "cycle_used_bytes": int(modem.get("cycle_used_bytes") or 0),
+            "traffic_bytes_in": int(modem.get("traffic_bytes_in") or 0),
+            "traffic_bytes_out": int(modem.get("traffic_bytes_out") or 0),
+            "quota_exhausted": bool(modem.get("quota_exhausted")),
+            "updated_at": utc_now_iso(),
+        }
+        records[key] = record
+    record["key"] = key
+    record["node_id"] = node_id
+    record["modem_id"] = modem_id
+    record["modem_ordinal"] = ordinal
+    if imei:
+        record["imei"] = imei
+    if str(modem.get("iccid") or "").strip():
+        record["iccid"] = str(modem.get("iccid") or "").strip()
+    if str(modem.get("local_interface") or "").strip():
+        record["local_interface"] = str(modem.get("local_interface") or "").strip()
+    record["plan_kind"] = normalize_plan_kind(record.get("plan_kind"))
+    record["cycle_mode"] = normalize_cycle_mode(record.get("cycle_mode"))
+    if not str(record.get("cycle_anchor_at") or "").strip():
+        record["cycle_anchor_at"] = month_start_iso()
+    if not str(record.get("cycle_start_at") or "").strip():
+        record["cycle_start_at"] = record["cycle_anchor_at"]
+    return record
+
+
+def cycle_limit_bytes(record):
+    if normalize_plan_kind(record.get("plan_kind")) == "unlimited":
+        return 0
+    limit = parse_float_or_none(record.get("traffic_limit_gb"))
+    if not limit or limit <= 0:
+        return 0
+    return int(limit * 1024 * 1024 * 1024)
+
+
+def apply_usage_record_to_modem(modem, record):
+    if not isinstance(modem, dict) or not isinstance(record, dict):
+        return modem
+    used = int(record.get("cycle_used_bytes") or 0)
+    limit = cycle_limit_bytes(record)
+    exhausted = bool(record.get("quota_exhausted")) or (limit > 0 and used >= limit)
+    modem["traffic_bytes_in"] = int(record.get("traffic_bytes_in") or 0)
+    modem["traffic_bytes_out"] = int(record.get("traffic_bytes_out") or 0)
+    modem["cycle_used_bytes"] = used
+    modem["cycle_limit_bytes"] = limit
+    modem["cycle_mode"] = normalize_cycle_mode(record.get("cycle_mode"))
+    modem["cycle_start_at"] = record.get("cycle_start_at") or record.get("cycle_anchor_at") or ""
+    modem["next_reset_at"] = record.get("next_reset_at") or ""
+    modem["remaining_bytes"] = (limit - used) if limit > 0 else None
+    modem["quota_exhausted"] = exhausted
+    modem["quota_block_reason"] = record.get("quota_block_reason") or ("traffic quota exhausted" if exhausted else "")
+    modem["traffic_source"] = record.get("traffic_source") or ""
+    modem["traffic_sampled_at"] = record.get("last_counter_sample_at") or record.get("traffic_sampled_at") or ""
+    if exhausted:
+        modem["client_eligible"] = False
+    return modem
+
+
+def apply_local_usage_to_overview(overview):
+    if not isinstance(overview, dict):
+        return overview
+    state = read_local_modem_usage_state()
+    initial_usage_keys = set((state.get("modems") or {}).keys())
+    for modem in overview.get("modems", []) or []:
+        if not isinstance(modem, dict):
+            continue
+        record = ensure_usage_record(state, modem)
+        if record:
+            apply_usage_record_to_modem(modem, record)
+    by_key = {}
+    for modem in overview.get("modems", []) or []:
+        if isinstance(modem, dict):
+            node_id, modem_id, imei, _ = live_modem_identity(modem)
+            for key in (modem_usage_key(node_id, modem_id, imei), f"{node_id}:{modem_id}"):
+                if key:
+                    by_key[key] = modem
+    for node in overview.get("nodes", []) or []:
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("node_id") or "").strip()
+        for modem in node.get("modems", []) or []:
+            if not isinstance(modem, dict):
+                continue
+            modem.setdefault("node_id", node_id)
+            record = ensure_usage_record(state, modem)
+            if record:
+                apply_usage_record_to_modem(modem, record)
+            key = modem_usage_key(node_id, modem.get("id"), modem.get("imei"))
+            if key and key in by_key:
+                by_key[key].update({k: v for k, v in modem.items() if k.startswith("cycle_") or k.startswith("quota_") or k in ("traffic_bytes_in", "traffic_bytes_out", "remaining_bytes", "client_eligible", "traffic_source", "traffic_sampled_at")})
+    if set((state.get("modems") or {}).keys()) != initial_usage_keys:
+        try:
+            write_local_modem_usage_state(state)
+        except Exception as err:
+            ui_log("failed to persist local modem usage state", error=str(err))
+    return overview
+
+
+def build_local_modem_billing(overview):
+    state = read_local_modem_usage_state()
+    items = []
+    for modem in overview.get("modems", []) or []:
+        if not isinstance(modem, dict):
+            continue
+        record = ensure_usage_record(state, modem)
+        if not record:
+            continue
+        used = int(record.get("cycle_used_bytes") or modem.get("cycle_used_bytes") or 0)
+        limit = cycle_limit_bytes(record)
+        remaining = (limit - used) if limit > 0 else None
+        exhausted = bool(record.get("quota_exhausted")) or (limit > 0 and used >= limit)
+        items.append({
+            "key": record.get("key"),
+            "node_id": record.get("node_id"),
+            "modem_id": record.get("modem_id"),
+            "modem_ordinal": int(record.get("modem_ordinal") or modem.get("modem_number") or modem.get("ordinal") or 0),
+            "imei": record.get("imei") or normalize_digits(modem.get("imei")),
+            "iccid": record.get("iccid") or modem.get("iccid") or "",
+            "plan_kind": normalize_plan_kind(record.get("plan_kind")),
+            "traffic_limit_gb": record.get("traffic_limit_gb"),
+            "cycle_mode": normalize_cycle_mode(record.get("cycle_mode")),
+            "auto_reset_day": record.get("auto_reset_day"),
+            "cycle_anchor_at": record.get("cycle_anchor_at") or "",
+            "last_manual_reset_at": record.get("last_manual_reset_at") or "",
+            "notes": record.get("notes") or "",
+            "cycle_start_at": record.get("cycle_start_at") or record.get("cycle_anchor_at") or "",
+            "next_reset_at": record.get("next_reset_at") or "",
+            "cycle_used_bytes": used,
+            "cycle_limit_bytes": limit,
+            "remaining_bytes": remaining,
+            "quota_exhausted": exhausted,
+            "quota_block_reason": record.get("quota_block_reason") or ("traffic quota exhausted" if exhausted else ""),
+            "traffic_source": record.get("traffic_source") or "",
+            "traffic_sampled_at": record.get("last_counter_sample_at") or record.get("traffic_sampled_at") or "",
+            "sim_needs_check": bool(modem.get("sim_needs_check")),
+            "sim_quarantined": bool(modem.get("sim_quarantined")),
+            "sim_check_status": modem.get("sim_check_status") or "",
+            "sim_quarantine_note": modem.get("sim_quarantine_note") or "",
+            "sim_degraded_events_24h": int(modem.get("sim_degraded_events_24h") or 0),
+            "sim_last_checked_at": modem.get("sim_last_checked_at") or "",
+        })
+    try:
+        write_local_modem_usage_state(state)
+    except Exception as err:
+        ui_log("failed to persist local modem billing state", error=str(err))
+    items.sort(key=lambda item: (str(item.get("node_id") or ""), int(item.get("modem_ordinal") or 0), str(item.get("modem_id") or "")))
+    return {"partner_key": PARTNER_KEY, "modems": items, "count": len(items), "source": "local_node"}
+
+
+def update_local_modem_billing(req):
+    overview = fetch_overview()
+    state = read_local_modem_usage_state()
+    node_id = str(req.get("node_id") or "").strip()
+    modem_id = str(req.get("modem_id") or "").strip()
+    live = find_live_modem(overview, node_id, modem_id)
+    if not live:
+        live = {"node_id": node_id, "id": modem_id}
+    record = ensure_usage_record(state, live)
+    if not record:
+        raise ValueError("node_id and modem_id are required")
+
+    plan_kind = normalize_plan_kind(req.get("plan_kind") or record.get("plan_kind"))
+    record["plan_kind"] = plan_kind
+    if plan_kind == "unlimited":
+        record.pop("traffic_limit_gb", None)
+    else:
+        limit = parse_float_or_none(req.get("traffic_limit_gb"))
+        if limit is None:
+            record.pop("traffic_limit_gb", None)
+        else:
+            record["traffic_limit_gb"] = limit
+    record["cycle_mode"] = normalize_cycle_mode(req.get("cycle_mode") or record.get("cycle_mode"))
+    auto_reset_day = parse_int_or_none(req.get("auto_reset_day"))
+    if auto_reset_day is None:
+        record.pop("auto_reset_day", None)
+    else:
+        record["auto_reset_day"] = max(1, min(31, auto_reset_day))
+    record["notes"] = str(req.get("notes") or "").strip()
+    if req.get("manual_reset"):
+        now = utc_now_iso()
+        record["cycle_anchor_at"] = now
+        record["cycle_start_at"] = now
+        record["last_manual_reset_at"] = now
+        record["cycle_used_bytes"] = 0
+        record["traffic_bytes_in"] = 0
+        record["traffic_bytes_out"] = 0
+        record.pop("last_counter_sample_at", None)
+        record.pop("last_rx_bytes", None)
+        record.pop("last_tx_bytes", None)
+    limit = cycle_limit_bytes(record)
+    used = int(record.get("cycle_used_bytes") or 0)
+    exhausted = limit > 0 and used >= limit
+    record["quota_exhausted"] = exhausted
+    record["quota_block_reason"] = "traffic quota exhausted" if exhausted else ""
+    record["updated_at"] = utc_now_iso()
+    write_local_modem_usage_state(state)
+
+    mirror = dict(req)
+    mirror["partner_key"] = PARTNER_KEY
+    mirror["cycle_mode"] = record["cycle_mode"]
+    try:
+        json_request(f"{MAIN_SERVER}/api/partner/modem-billing", method="POST", payload=mirror)
+    except Exception as err:
+        ui_log("main modem billing mirror failed", error=str(err))
+    return build_local_modem_billing(apply_local_usage_to_overview(overview))
 
 
 def merge_local_registry_entries(overview):
@@ -1051,16 +1377,10 @@ def apply_local_flash_job(overview):
     return overview
 
 
-def read_hilink_device_info(base_url):
+def probe_hilink_device_info(base_url):
     base_url = str(base_url or "").strip().rstrip("/")
     if not base_url:
         return None
-    now = time.time()
-    with HILINK_INFO_CACHE_LOCK:
-        cached = HILINK_INFO_CACHE.get(base_url)
-        if cached and (now - float(cached.get("ts") or 0.0)) <= HILINK_INFO_CACHE_TTL:
-            data = cached.get("data")
-            return copy.deepcopy(data) if isinstance(data, dict) else None
     try:
         ses = subprocess.run(
             ["curl", "-fsS", "--max-time", str(HILINK_PROBE_TIMEOUT), f"{base_url}/api/webserver/SesTokInfo"],
@@ -1119,9 +1439,62 @@ def read_hilink_device_info(base_url):
         result = fields if fields else None
     except Exception:
         result = None
-    with HILINK_INFO_CACHE_LOCK:
-        HILINK_INFO_CACHE[base_url] = {"ts": now, "data": copy.deepcopy(result) if isinstance(result, dict) else None}
     return result
+
+
+def schedule_hilink_info_refresh(base_url):
+    base_url = str(base_url or "").strip().rstrip("/")
+    if not base_url:
+        return
+    with HILINK_INFO_CACHE_LOCK:
+        cached = HILINK_INFO_CACHE.get(base_url) or {}
+        if cached.get("refreshing"):
+            return
+        cached["refreshing"] = True
+        HILINK_INFO_CACHE[base_url] = cached
+
+    def worker():
+        result = probe_hilink_device_info(base_url)
+        with HILINK_INFO_CACHE_LOCK:
+            HILINK_INFO_CACHE[base_url] = {
+                "ts": time.time(),
+                "data": copy.deepcopy(result) if isinstance(result, dict) else None,
+                "refreshing": False,
+            }
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def read_hilink_device_info(base_url):
+    base_url = str(base_url or "").strip().rstrip("/")
+    if not base_url:
+        return None
+    now = time.time()
+    with HILINK_INFO_CACHE_LOCK:
+        cached = HILINK_INFO_CACHE.get(base_url)
+        if cached:
+            data = cached.get("data")
+            age = now - float(cached.get("ts") or 0.0)
+            if age <= HILINK_INFO_CACHE_TTL and isinstance(data, dict):
+                return copy.deepcopy(data)
+            if age <= HILINK_INFO_STALE_TTL and isinstance(data, dict):
+                if not cached.get("refreshing"):
+                    cached["refreshing"] = True
+                    HILINK_INFO_CACHE[base_url] = cached
+
+                    def stale_worker():
+                        result = probe_hilink_device_info(base_url)
+                        with HILINK_INFO_CACHE_LOCK:
+                            HILINK_INFO_CACHE[base_url] = {
+                                "ts": time.time(),
+                                "data": copy.deepcopy(result) if isinstance(result, dict) else None,
+                                "refreshing": False,
+                            }
+
+                    threading.Thread(target=stale_worker, daemon=True).start()
+                return copy.deepcopy(data)
+    schedule_hilink_info_refresh(base_url)
+    return None
 
 
 def enrich_overview_with_local_modem_state(overview):
@@ -1465,6 +1838,7 @@ def rebuild_overview_snapshot():
         data.setdefault("main_server", MAIN_SERVER)
         enrich_overview_with_local_modem_state(data)
         inject_local_runtime_state(data)
+        apply_local_usage_to_overview(data)
         apply_local_flash_job(data)
         reconcile_aliases(data)
     return data
@@ -1704,11 +2078,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path.startswith("/api/modem-billing"):
             try:
-                qs = urllib.parse.urlencode({"partner_key": PARTNER_KEY})
-                data = json_request(f"{MAIN_SERVER}/api/partner/modem-billing?{qs}")
+                data = build_local_modem_billing(fetch_overview())
                 self._send_json(200, data)
-            except urllib.error.HTTPError as err:
-                self._send_text(err.code, err.read().decode("utf-8", errors="ignore"))
             except Exception as err:
                 self._send_text(502, str(err))
             return
@@ -1780,11 +2151,8 @@ class Handler(BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", "0"))
                 raw = self.rfile.read(length) if length > 0 else b"{}"
                 req = json.loads(raw.decode("utf-8"))
-                req["partner_key"] = PARTNER_KEY
-                data = json_request(f"{MAIN_SERVER}/api/partner/modem-billing", method="POST", payload=req)
+                data = update_local_modem_billing(req)
                 self._send_json(200, data)
-            except urllib.error.HTTPError as err:
-                self._send_text(err.code, err.read().decode("utf-8", errors="ignore"))
             except Exception as err:
                 self._send_text(400, str(err))
             return
