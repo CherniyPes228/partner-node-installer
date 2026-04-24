@@ -31,6 +31,7 @@ SERVICE_NAME="partner-node"
 UI_SERVICE_NAME="partner-node-ui"
 UI_DIR="/opt/partner-node-ui"
 UI_PORT="19090"
+PARTNER_NODE_HEADLESS_APPLIANCE="${PARTNER_NODE_HEADLESS_APPLIANCE:-false}"
 AUTO_UPDATE_SERVICE_NAME="partner-node-self-update"
 AUTO_UPDATE_TIMER_NAME="partner-node-self-update.timer"
 AUTO_UPDATE_ENABLED="false"
@@ -48,6 +49,8 @@ NC="\033[0m"
 log_info() { echo -e "${GREEN}[INFO]${NC} $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_err()  { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+
+export PARTNER_NODE_HEADLESS_APPLIANCE
 
 run_remote_installer_lib() {
   local script_name="$1"
@@ -92,6 +95,7 @@ Optional:
   --threeproxy-package-url <url>  Custom 3proxy package URL (.rpm/.deb)
   --skip-firewall                 Do not apply host firewall hardening
   --ui-port <port>                Local partner UI port (default: 19090)
+  --headless-appliance <bool>     Force appliance TTY-only mode and disable display manager (default: false)
   --auto-update-enabled <bool>    true|false (default: false)
   --auto-update-interval <dur>    systemd duration, default: 6h
   --installer-url <url>           URL used by self-update timer
@@ -1747,6 +1751,7 @@ write_install_env() {
 PARTNER_KEY="${PARTNER_KEY}"
 COUNTRY="${COUNTRY}"
 MAIN_SERVER="${MAIN_SERVER}"
+PARTNER_NODE_HEADLESS_APPLIANCE="${PARTNER_NODE_HEADLESS_APPLIANCE}"
 BINARY_URL_OVERRIDE="${binary_url_override}"
 DOCTOR_BINARY_URL="${DOCTOR_BINARY_URL}"
 MODEM_ROTATION_METHOD="${MODEM_ROTATION_METHOD}"
@@ -1824,6 +1829,7 @@ ARGS=(
   --flash-assets-base-url "${FLASH_ASSETS_BASE_URL:-}"
   --install-prefix "${INSTALL_PREFIX:-/usr/local/bin}"
   --ui-port "${UI_PORT:-19090}"
+  --headless-appliance "${PARTNER_NODE_HEADLESS_APPLIANCE:-false}"
   --auto-update-enabled "${AUTO_UPDATE_ENABLED:-true}"
   --auto-update-interval "${AUTO_UPDATE_INTERVAL:-6h}"
   --installer-url "${INSTALLER_URL}"
@@ -1955,6 +1961,7 @@ parse_args() {
       --doctor-binary-url) DOCTOR_BINARY_URL="${2:-}"; shift 2 ;;
       --threeproxy-package-url) THREEPROXY_PACKAGE_URL="${2:-}"; shift 2 ;;
       --ui-port) UI_PORT="${2:-}"; shift 2 ;;
+      --headless-appliance) PARTNER_NODE_HEADLESS_APPLIANCE="${2:-}"; shift 2 ;;
       --auto-update-enabled) AUTO_UPDATE_ENABLED="${2:-}"; shift 2 ;;
       --auto-update-interval) AUTO_UPDATE_INTERVAL="${2:-}"; shift 2 ;;
       --installer-url) INSTALLER_URL="${2:-}"; shift 2 ;;
@@ -1992,6 +1999,10 @@ main() {
   fi
   if ! [[ "${UI_PORT}" =~ ^[0-9]+$ ]] || [[ "${UI_PORT}" -lt 1 || "${UI_PORT}" -gt 65535 ]]; then
     log_err "--ui-port must be a valid TCP port (1..65535)."
+    exit 1
+  fi
+  if [[ "${PARTNER_NODE_HEADLESS_APPLIANCE}" != "true" && "${PARTNER_NODE_HEADLESS_APPLIANCE}" != "false" ]]; then
+    log_err "--headless-appliance must be true or false."
     exit 1
   fi
   if [[ "${AUTO_UPDATE_ENABLED}" != "true" && "${AUTO_UPDATE_ENABLED}" != "false" ]]; then

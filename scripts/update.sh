@@ -35,6 +35,7 @@ UI_DIR="${UI_DIR:-/opt/partner-node-ui}"
 UI_PORT="${UI_PORT:-}"
 MAIN_SERVER="${MAIN_SERVER:-}"
 PARTNER_KEY="${PARTNER_KEY:-}"
+PARTNER_NODE_HEADLESS_APPLIANCE="${PARTNER_NODE_HEADLESS_APPLIANCE:-}"
 PARTNER_NODE_UPDATE_PATH="${PARTNER_NODE_UPDATE_PATH:-/usr/local/sbin/partner-node-update.sh}"
 INSTALLER_RAW_BASE_URL="${INSTALLER_RAW_BASE_URL:-https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main}"
 WITH_DEPENDENCIES="false"
@@ -50,6 +51,7 @@ Optional:
   --main-server <url>         Override MAIN server from installed config
   --partner-key <key>         Override partner key from installed config
   --ui-port <port>            Override local UI port (default: from installed ui.env or 19090)
+  --headless-appliance <bool> Force appliance TTY-only mode and disable display manager (default: false)
   --with-dependencies         Also refresh system dependencies
   --help, -h                  Show this help message
 
@@ -67,6 +69,7 @@ parse_args() {
       --main-server) MAIN_SERVER="${2:-}"; shift 2 ;;
       --partner-key) PARTNER_KEY="${2:-}"; shift 2 ;;
       --ui-port) UI_PORT="${2:-}"; shift 2 ;;
+      --headless-appliance) PARTNER_NODE_HEADLESS_APPLIANCE="${2:-}"; shift 2 ;;
       --with-dependencies) WITH_DEPENDENCIES="true"; shift ;;
       --help|-h) usage; exit 0 ;;
       *)
@@ -107,6 +110,7 @@ read_env_scalar() {
 load_existing_install_context() {
   local config_file="${CONFIG_DIR}/config.yaml"
   local ui_env_file="${UI_DIR}/ui.env"
+  local install_env_file="${CONFIG_DIR}/install.env"
 
   if [[ -z "${MAIN_SERVER}" ]]; then
     MAIN_SERVER="$(read_yaml_scalar "$config_file" "api" "main_server" | tr -d '\r')"
@@ -117,12 +121,22 @@ load_existing_install_context() {
   if [[ -z "${UI_PORT}" ]]; then
     UI_PORT="$(read_env_scalar "$ui_env_file" "UI_PORT" | tr -d '\r')"
   fi
+  if [[ -z "${PARTNER_NODE_HEADLESS_APPLIANCE}" ]]; then
+    PARTNER_NODE_HEADLESS_APPLIANCE="$(read_env_scalar "$install_env_file" "PARTNER_NODE_HEADLESS_APPLIANCE" | tr -d '\r')"
+  fi
   if [[ -z "${UI_PORT}" ]]; then
     UI_PORT="19090"
+  fi
+  if [[ -z "${PARTNER_NODE_HEADLESS_APPLIANCE}" ]]; then
+    PARTNER_NODE_HEADLESS_APPLIANCE="false"
   fi
 
   if [[ -z "${MAIN_SERVER}" || -z "${PARTNER_KEY}" ]]; then
     log_err "Could not read MAIN_SERVER / PARTNER_KEY from installed config. Pass them explicitly."
+    exit 1
+  fi
+  if [[ "${PARTNER_NODE_HEADLESS_APPLIANCE}" != "true" && "${PARTNER_NODE_HEADLESS_APPLIANCE}" != "false" ]]; then
+    log_err "Invalid PARTNER_NODE_HEADLESS_APPLIANCE value: ${PARTNER_NODE_HEADLESS_APPLIANCE} (expected true or false)"
     exit 1
   fi
 }
@@ -155,6 +169,7 @@ main() {
   fi
 
   export BINARY_URL INSTALL_PREFIX CONFIG_DIR SERVICE_NAME UI_SERVICE_NAME UI_DIR UI_PORT
+  export PARTNER_NODE_HEADLESS_APPLIANCE
   export MAIN_SERVER PARTNER_KEY INSTALLER_RAW_BASE_URL PARTNER_NODE_UPDATE_PATH
   export MODEM_FLASH_ENABLED="${MODEM_FLASH_ENABLED:-true}"
   export MODEM_FLASH_SCRIPT_PATH="${MODEM_FLASH_SCRIPT_PATH:-/usr/local/sbin/partner-node-provision-hilink.sh}"

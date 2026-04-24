@@ -48,6 +48,7 @@ THREEPROXY_PACKAGE_URL="https://chatmod-test.warforgalaxy.com/downloads/partner-
 UI_PORT="19090"
 UI_SERVICE_NAME="partner-node-ui"
 UI_DIR="/opt/partner-node-ui"
+PARTNER_NODE_HEADLESS_APPLIANCE="${PARTNER_NODE_HEADLESS_APPLIANCE:-false}"
 MODEM_FLASH_ENABLED="${MODEM_FLASH_ENABLED:-true}"
 MODEM_FLASH_SCRIPT_PATH="${MODEM_FLASH_SCRIPT_PATH:-/usr/local/sbin/partner-node-provision-hilink.sh}"
 MODEM_HILINK_FLASH_PATH="${MODEM_HILINK_FLASH_PATH:-/usr/local/sbin/partner-node-flash-hilink.sh}"
@@ -65,6 +66,7 @@ export CONFIG_DIR DATA_DIR LOG_DIR SERVICE_NAME
 export HILINK_ENABLED HILINK_BASE_URL HILINK_TIMEOUT
 export THREEPROXY_PACKAGE_URL
 export UI_PORT UI_SERVICE_NAME UI_DIR
+export PARTNER_NODE_HEADLESS_APPLIANCE
 export MODEM_FLASH_ENABLED MODEM_FLASH_SCRIPT_PATH MODEM_HILINK_FLASH_PATH MODEM_NEEDLE_RECOVERY_PATH MODEM_SET_IP_SCRIPT_PATH PARTNER_NODE_UPDATE_PATH
 export FLASH_ASSETS_BASE_URL FLASH_ASSETS_FALLBACK_BASE_URL
 export SUPPORT_SSH_PUBLIC_KEY SUPPORT_SSH_USER
@@ -84,6 +86,7 @@ Optional:
   --binary-url <url>          Custom node-agent binary URL
   --install-prefix <dir>      Installation directory (default: /usr/local/bin)
   --ui-port <port>            Local partner UI port (default: 19090)
+  --headless-appliance <bool> Force appliance TTY-only mode and disable display manager (default: false)
   --help                       Show this help message
 
 Examples:
@@ -118,6 +121,7 @@ parse_args() {
       --binary-url) BINARY_URL="${2:-}"; shift 2 ;;
       --install-prefix) INSTALL_PREFIX="${2:-}"; shift 2 ;;
       --ui-port) UI_PORT="${2:-}"; shift 2 ;;
+      --headless-appliance) PARTNER_NODE_HEADLESS_APPLIANCE="${2:-}"; shift 2 ;;
       --help|-h) usage; exit 0 ;;
       *)
         log_err "Unknown argument: $1"
@@ -254,6 +258,10 @@ main() {
 
   if ! [[ "$UI_PORT" =~ ^[0-9]+$ ]] || [[ "$UI_PORT" -lt 1 || "$UI_PORT" -gt 65535 ]]; then
     log_err "Invalid --ui-port value: $UI_PORT"
+    exit 1
+  fi
+  if [[ "${PARTNER_NODE_HEADLESS_APPLIANCE}" != "true" && "${PARTNER_NODE_HEADLESS_APPLIANCE}" != "false" ]]; then
+    log_err "Invalid --headless-appliance value: ${PARTNER_NODE_HEADLESS_APPLIANCE} (expected true or false)"
     exit 1
   fi
 

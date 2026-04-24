@@ -1,13 +1,25 @@
 #!/usr/bin/env bash
 ###############################################################################
-# Setup headless appliance hardening
-# Disables power-key shutdown, desktop targets, and PackageKit churn.
+# Setup headless appliance hardening.
+# Power/suspend protection is always applied. Desktop shutdown is opt-in.
 ###############################################################################
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
 LOGIND_DROPIN_DIR="/etc/systemd/logind.conf.d"
 LOGIND_DROPIN_PATH="${LOGIND_DROPIN_DIR}/partner-node-headless.conf"
+PARTNER_NODE_HEADLESS_APPLIANCE="${PARTNER_NODE_HEADLESS_APPLIANCE:-false}"
+
+is_true() {
+  case "${1:-}" in
+    1|true|TRUE|True|yes|YES|Yes|on|ON|On)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
 
 disable_service_if_present() {
   local service="$1"
@@ -52,16 +64,21 @@ HandleLidSwitchDocked=ignore
 EOF
   chmod 0644 "$LOGIND_DROPIN_PATH"
 
-  log_info "  Setting default target to multi-user.target"
-  systemctl set-default multi-user.target >/dev/null 2>&1 || true
+  if is_true "${PARTNER_NODE_HEADLESS_APPLIANCE}"; then
+    log_info "  Headless appliance mode is enabled: disabling graphical boot path"
+    log_info "  Setting default target to multi-user.target"
+    systemctl set-default multi-user.target >/dev/null 2>&1 || true
 
-  disable_service_if_present "gdm.service"
-  disable_service_if_present "gdm3.service"
-  disable_service_if_present "lightdm.service"
-  disable_service_if_present "sddm.service"
+    disable_service_if_present "gdm.service"
+    disable_service_if_present "gdm3.service"
+    disable_service_if_present "lightdm.service"
+    disable_service_if_present "sddm.service"
 
-  mask_service_if_present "packagekit.service"
-  mask_service_if_present "packagekit-offline-update.service"
+    mask_service_if_present "packagekit.service"
+    mask_service_if_present "packagekit-offline-update.service"
+  else
+    log_info "  Preserving current graphics mode (set PARTNER_NODE_HEADLESS_APPLIANCE=true to force TTY-only boot)"
+  fi
 
   log_info "  Reloading systemd and restarting logind"
   systemctl daemon-reload
