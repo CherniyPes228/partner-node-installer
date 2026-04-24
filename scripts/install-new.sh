@@ -49,6 +49,8 @@ UI_PORT="19090"
 UI_SERVICE_NAME="partner-node-ui"
 UI_DIR="/opt/partner-node-ui"
 PARTNER_NODE_HEADLESS_APPLIANCE="${PARTNER_NODE_HEADLESS_APPLIANCE:-false}"
+PARTNER_NODE_DISABLE_SLEEP="${PARTNER_NODE_DISABLE_SLEEP:-true}"
+PARTNER_NODE_KEEP_SCREEN_ON="${PARTNER_NODE_KEEP_SCREEN_ON:-true}"
 MODEM_FLASH_ENABLED="${MODEM_FLASH_ENABLED:-true}"
 MODEM_FLASH_SCRIPT_PATH="${MODEM_FLASH_SCRIPT_PATH:-/usr/local/sbin/partner-node-provision-hilink.sh}"
 MODEM_HILINK_FLASH_PATH="${MODEM_HILINK_FLASH_PATH:-/usr/local/sbin/partner-node-flash-hilink.sh}"
@@ -67,6 +69,7 @@ export HILINK_ENABLED HILINK_BASE_URL HILINK_TIMEOUT
 export THREEPROXY_PACKAGE_URL
 export UI_PORT UI_SERVICE_NAME UI_DIR
 export PARTNER_NODE_HEADLESS_APPLIANCE
+export PARTNER_NODE_DISABLE_SLEEP PARTNER_NODE_KEEP_SCREEN_ON
 export MODEM_FLASH_ENABLED MODEM_FLASH_SCRIPT_PATH MODEM_HILINK_FLASH_PATH MODEM_NEEDLE_RECOVERY_PATH MODEM_SET_IP_SCRIPT_PATH PARTNER_NODE_UPDATE_PATH
 export FLASH_ASSETS_BASE_URL FLASH_ASSETS_FALLBACK_BASE_URL
 export SUPPORT_SSH_PUBLIC_KEY SUPPORT_SSH_USER
@@ -87,6 +90,8 @@ Optional:
   --install-prefix <dir>      Installation directory (default: /usr/local/bin)
   --ui-port <port>            Local partner UI port (default: 19090)
   --headless-appliance <bool> Force appliance TTY-only mode and disable display manager (default: false)
+  --disable-sleep <bool>      Prevent sleep/suspend/hibernate/lid sleep (default: true)
+  --keep-screen-on <bool>     Prevent desktop screen blanking where supported (default: true)
   --help                       Show this help message
 
 Examples:
@@ -122,6 +127,8 @@ parse_args() {
       --install-prefix) INSTALL_PREFIX="${2:-}"; shift 2 ;;
       --ui-port) UI_PORT="${2:-}"; shift 2 ;;
       --headless-appliance) PARTNER_NODE_HEADLESS_APPLIANCE="${2:-}"; shift 2 ;;
+      --disable-sleep) PARTNER_NODE_DISABLE_SLEEP="${2:-}"; shift 2 ;;
+      --keep-screen-on) PARTNER_NODE_KEEP_SCREEN_ON="${2:-}"; shift 2 ;;
       --help|-h) usage; exit 0 ;;
       *)
         log_err "Unknown argument: $1"
@@ -235,6 +242,50 @@ sync_system_time() {
   fi
 }
 
+upsert_install_env_var() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+  local tmp
+
+  tmp="$(mktemp)"
+  if [[ -f "$file" ]]; then
+    awk -v key="$key" -v value="$value" '
+      BEGIN { replaced=0 }
+      $0 ~ "^" key "=" {
+        print key "=\"" value "\""
+        replaced=1
+        next
+      }
+      { print }
+      END {
+        if (replaced == 0) {
+          print key "=\"" value "\""
+        }
+      }
+    ' "$file" > "$tmp"
+  else
+    printf '%s="%s"\n' "$key" "$value" > "$tmp"
+  fi
+
+  mv "$tmp" "$file"
+}
+
+write_install_policy_env() {
+  local env_file="${CONFIG_DIR}/install.env"
+
+  mkdir -p "$CONFIG_DIR"
+  touch "$env_file"
+  chmod 0600 "$env_file"
+
+  upsert_install_env_var "$env_file" "PARTNER_NODE_HEADLESS_APPLIANCE" "$PARTNER_NODE_HEADLESS_APPLIANCE"
+  upsert_install_env_var "$env_file" "PARTNER_NODE_DISABLE_SLEEP" "$PARTNER_NODE_DISABLE_SLEEP"
+  upsert_install_env_var "$env_file" "PARTNER_NODE_KEEP_SCREEN_ON" "$PARTNER_NODE_KEEP_SCREEN_ON"
+
+  chmod 0600 "$env_file"
+  chown root:root "$env_file" 2>/dev/null || true
+}
+
 main() {
   log_info "╔════════════════════════════════════════════════════════════╗"
   log_info "║     Partner Node Zero-Touch Installer (v2 - Modular)      ║"
@@ -262,6 +313,14 @@ main() {
   fi
   if [[ "${PARTNER_NODE_HEADLESS_APPLIANCE}" != "true" && "${PARTNER_NODE_HEADLESS_APPLIANCE}" != "false" ]]; then
     log_err "Invalid --headless-appliance value: ${PARTNER_NODE_HEADLESS_APPLIANCE} (expected true or false)"
+    exit 1
+  fi
+  if [[ "${PARTNER_NODE_DISABLE_SLEEP}" != "true" && "${PARTNER_NODE_DISABLE_SLEEP}" != "false" ]]; then
+    log_err "Invalid --disable-sleep value: ${PARTNER_NODE_DISABLE_SLEEP} (expected true or false)"
+    exit 1
+  fi
+  if [[ "${PARTNER_NODE_KEEP_SCREEN_ON}" != "true" && "${PARTNER_NODE_KEEP_SCREEN_ON}" != "false" ]]; then
+    log_err "Invalid --keep-screen-on value: ${PARTNER_NODE_KEEP_SCREEN_ON} (expected true or false)"
     exit 1
   fi
 
@@ -314,7 +373,7 @@ main() {
 
   # Download all lib scripts (for pipe mode)
   log_info "Downloading setup scripts..."
-  for script in setup-dependencies setup-headless-hardening setup-3proxy setup-node-agent setup-config setup-systemd setup-routing setup-modem-dhcp setup-flash setup-ssh setup-ui setup-update; do
+  for script in setup-dependencies setup-power-policy setup-headless-hardening setup-3proxy setup-node-agent setup-config setup-systemd setup-routing setup-modem-dhcp setup-flash setup-ssh setup-ui setup-update; do
     download_file "https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/lib/$script.sh" "$LIB_DIR/$script.sh" || {
       log_err "Failed to download $script.sh"
       ((failed++))
@@ -326,41 +385,47 @@ main() {
     exit 1
   fi
 
-  log_info "Step 1/12: Installing system dependencies..."
+  log_info "Step 1/13: Installing system dependencies..."
   bash "$LIB_DIR/setup-dependencies.sh" || ((failed++))
 
-  log_info "Step 2/12: Applying headless appliance hardening..."
+  log_info "Step 2/13: Applying power policy..."
+  bash "$LIB_DIR/setup-power-policy.sh" || ((failed++))
+
+  log_info "Step 3/13: Applying headless appliance hardening..."
   bash "$LIB_DIR/setup-headless-hardening.sh" || ((failed++))
 
-  log_info "Step 3/12: Setting up 3proxy..."
+  log_info "Step 4/13: Setting up 3proxy..."
   bash "$LIB_DIR/setup-3proxy.sh" || ((failed++))
 
-  log_info "Step 4/12: Downloading node-agent..."
+  log_info "Step 5/13: Downloading node-agent..."
   bash "$LIB_DIR/setup-node-agent.sh" || ((failed++))
 
-  log_info "Step 5/12: Creating configuration..."
+  log_info "Step 6/13: Creating configuration..."
   bash "$LIB_DIR/setup-config.sh" || ((failed++))
 
-  log_info "Step 6/12: Setting up systemd units..."
+  log_info "Step 7/13: Setting up systemd units..."
   bash "$LIB_DIR/setup-systemd.sh" || ((failed++))
 
-  log_info "Step 7/12: Configuring routing (Ethernet primary, Wi-Fi fallback, modem for proxy)..."
+  log_info "Step 8/13: Configuring routing (Ethernet primary, Wi-Fi fallback, modem for proxy)..."
   bash "$LIB_DIR/setup-routing.sh" || ((failed++))
 
-  log_info "Step 8/12: Configuring NetworkManager dispatcher for modem/uplink reconcile..."
+  log_info "Step 9/13: Configuring NetworkManager dispatcher for modem/uplink reconcile..."
   bash "$LIB_DIR/setup-modem-dhcp.sh" || ((failed++))
 
-  log_info "Step 9/12: Installing safe flash assets..."
+  log_info "Step 10/13: Installing safe flash assets..."
   bash "$LIB_DIR/setup-flash.sh" || ((failed++))
 
-  log_info "Step 10/12: Setting up SSH support access..."
+  log_info "Step 11/13: Setting up SSH support access..."
   bash "$LIB_DIR/setup-ssh.sh" || ((failed++))
 
-  log_info "Step 11/12: Setting up local partner UI..."
+  log_info "Step 12/13: Setting up local partner UI..."
   bash "$LIB_DIR/setup-ui.sh" || ((failed++))
 
-  log_info "Step 12/12: Installing local update helper..."
+  log_info "Step 13/13: Installing local update helper..."
   bash "$LIB_DIR/setup-update.sh" || ((failed++))
+
+  log_info "Recording install power policy preferences..."
+  write_install_policy_env
 
   if [[ $failed -gt 0 ]]; then
     log_warn "⚠️  $failed step(s) failed, but continuing..."

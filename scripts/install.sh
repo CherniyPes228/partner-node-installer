@@ -32,6 +32,8 @@ UI_SERVICE_NAME="partner-node-ui"
 UI_DIR="/opt/partner-node-ui"
 UI_PORT="19090"
 PARTNER_NODE_HEADLESS_APPLIANCE="${PARTNER_NODE_HEADLESS_APPLIANCE:-false}"
+PARTNER_NODE_DISABLE_SLEEP="${PARTNER_NODE_DISABLE_SLEEP:-true}"
+PARTNER_NODE_KEEP_SCREEN_ON="${PARTNER_NODE_KEEP_SCREEN_ON:-true}"
 AUTO_UPDATE_SERVICE_NAME="partner-node-self-update"
 AUTO_UPDATE_TIMER_NAME="partner-node-self-update.timer"
 AUTO_UPDATE_ENABLED="false"
@@ -50,7 +52,7 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $*"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_err()  { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 
-export PARTNER_NODE_HEADLESS_APPLIANCE
+export PARTNER_NODE_HEADLESS_APPLIANCE PARTNER_NODE_DISABLE_SLEEP PARTNER_NODE_KEEP_SCREEN_ON
 
 run_remote_installer_lib() {
   local script_name="$1"
@@ -96,6 +98,8 @@ Optional:
   --skip-firewall                 Do not apply host firewall hardening
   --ui-port <port>                Local partner UI port (default: 19090)
   --headless-appliance <bool>     Force appliance TTY-only mode and disable display manager (default: false)
+  --disable-sleep <bool>          Prevent sleep/suspend/hibernate/lid sleep (default: true)
+  --keep-screen-on <bool>         Prevent desktop screen blanking where supported (default: true)
   --auto-update-enabled <bool>    true|false (default: false)
   --auto-update-interval <dur>    systemd duration, default: 6h
   --installer-url <url>           URL used by self-update timer
@@ -1752,6 +1756,8 @@ PARTNER_KEY="${PARTNER_KEY}"
 COUNTRY="${COUNTRY}"
 MAIN_SERVER="${MAIN_SERVER}"
 PARTNER_NODE_HEADLESS_APPLIANCE="${PARTNER_NODE_HEADLESS_APPLIANCE}"
+PARTNER_NODE_DISABLE_SLEEP="${PARTNER_NODE_DISABLE_SLEEP}"
+PARTNER_NODE_KEEP_SCREEN_ON="${PARTNER_NODE_KEEP_SCREEN_ON}"
 BINARY_URL_OVERRIDE="${binary_url_override}"
 DOCTOR_BINARY_URL="${DOCTOR_BINARY_URL}"
 MODEM_ROTATION_METHOD="${MODEM_ROTATION_METHOD}"
@@ -1830,6 +1836,8 @@ ARGS=(
   --install-prefix "${INSTALL_PREFIX:-/usr/local/bin}"
   --ui-port "${UI_PORT:-19090}"
   --headless-appliance "${PARTNER_NODE_HEADLESS_APPLIANCE:-false}"
+  --disable-sleep "${PARTNER_NODE_DISABLE_SLEEP:-true}"
+  --keep-screen-on "${PARTNER_NODE_KEEP_SCREEN_ON:-true}"
   --auto-update-enabled "${AUTO_UPDATE_ENABLED:-true}"
   --auto-update-interval "${AUTO_UPDATE_INTERVAL:-6h}"
   --installer-url "${INSTALLER_URL}"
@@ -1962,6 +1970,8 @@ parse_args() {
       --threeproxy-package-url) THREEPROXY_PACKAGE_URL="${2:-}"; shift 2 ;;
       --ui-port) UI_PORT="${2:-}"; shift 2 ;;
       --headless-appliance) PARTNER_NODE_HEADLESS_APPLIANCE="${2:-}"; shift 2 ;;
+      --disable-sleep) PARTNER_NODE_DISABLE_SLEEP="${2:-}"; shift 2 ;;
+      --keep-screen-on) PARTNER_NODE_KEEP_SCREEN_ON="${2:-}"; shift 2 ;;
       --auto-update-enabled) AUTO_UPDATE_ENABLED="${2:-}"; shift 2 ;;
       --auto-update-interval) AUTO_UPDATE_INTERVAL="${2:-}"; shift 2 ;;
       --installer-url) INSTALLER_URL="${2:-}"; shift 2 ;;
@@ -2003,6 +2013,14 @@ main() {
   fi
   if [[ "${PARTNER_NODE_HEADLESS_APPLIANCE}" != "true" && "${PARTNER_NODE_HEADLESS_APPLIANCE}" != "false" ]]; then
     log_err "--headless-appliance must be true or false."
+    exit 1
+  fi
+  if [[ "${PARTNER_NODE_DISABLE_SLEEP}" != "true" && "${PARTNER_NODE_DISABLE_SLEEP}" != "false" ]]; then
+    log_err "--disable-sleep must be true or false."
+    exit 1
+  fi
+  if [[ "${PARTNER_NODE_KEEP_SCREEN_ON}" != "true" && "${PARTNER_NODE_KEEP_SCREEN_ON}" != "false" ]]; then
+    log_err "--keep-screen-on must be true or false."
     exit 1
   fi
   if [[ "${AUTO_UPDATE_ENABLED}" != "true" && "${AUTO_UPDATE_ENABLED}" != "false" ]]; then
@@ -2049,6 +2067,7 @@ main() {
   write_config
   harden_secret_permissions
   configure_firewall || true
+  run_remote_installer_lib "setup-power-policy.sh" || log_warn "Power policy setup failed, continuing..."
   run_remote_installer_lib "setup-headless-hardening.sh" || log_warn "Headless hardening failed, continuing..."
 
   write_systemd_unit
