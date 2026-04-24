@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 ###############################################################################
 # Setup headless appliance hardening.
-# Power/suspend protection is always applied. Desktop shutdown is opt-in.
+# Desktop-safe installs must not restart logind or change power/lid policy.
 ###############################################################################
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
@@ -47,7 +47,20 @@ mask_service_if_present() {
 setup_headless_hardening() {
   require_root
 
-  log_info "Applying headless appliance hardening..."
+  log_info "Applying headless appliance policy..."
+
+  if ! is_true "${PARTNER_NODE_HEADLESS_APPLIANCE}"; then
+    log_info "  Preserving desktop session; headless hardening disabled"
+    if [[ -f "$LOGIND_DROPIN_PATH" ]]; then
+      log_info "  Removing legacy logind drop-in: ${LOGIND_DROPIN_PATH}"
+      rm -f "$LOGIND_DROPIN_PATH"
+    fi
+    log_info "  Not restarting systemd-logind in desktop-safe mode"
+    log_info "Headless appliance policy skipped"
+    return 0
+  fi
+
+  log_info "  Headless appliance mode is enabled: disabling graphical boot path"
 
   mkdir -p "$LOGIND_DROPIN_DIR"
   cat > "$LOGIND_DROPIN_PATH" <<'EOF'
@@ -64,27 +77,22 @@ HandleLidSwitchDocked=ignore
 EOF
   chmod 0644 "$LOGIND_DROPIN_PATH"
 
-  if is_true "${PARTNER_NODE_HEADLESS_APPLIANCE}"; then
-    log_info "  Headless appliance mode is enabled: disabling graphical boot path"
-    log_info "  Setting default target to multi-user.target"
-    systemctl set-default multi-user.target >/dev/null 2>&1 || true
+  log_info "  Setting default target to multi-user.target"
+  systemctl set-default multi-user.target >/dev/null 2>&1 || true
 
-    disable_service_if_present "gdm.service"
-    disable_service_if_present "gdm3.service"
-    disable_service_if_present "lightdm.service"
-    disable_service_if_present "sddm.service"
+  disable_service_if_present "gdm.service"
+  disable_service_if_present "gdm3.service"
+  disable_service_if_present "lightdm.service"
+  disable_service_if_present "sddm.service"
 
-    mask_service_if_present "packagekit.service"
-    mask_service_if_present "packagekit-offline-update.service"
-  else
-    log_info "  Preserving current graphics mode (set PARTNER_NODE_HEADLESS_APPLIANCE=true to force TTY-only boot)"
-  fi
+  mask_service_if_present "packagekit.service"
+  mask_service_if_present "packagekit-offline-update.service"
 
   log_info "  Reloading systemd and restarting logind"
   systemctl daemon-reload
   systemctl try-restart systemd-logind.service >/dev/null 2>&1 || true
 
-  log_info "вњ… Headless hardening applied"
+  log_info "Headless appliance hardening applied"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
