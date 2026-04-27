@@ -11,7 +11,7 @@ set -euo pipefail
 PARTNER_KEY=""
 COUNTRY=""
 MAIN_SERVER=""
-BINARY_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.22"
+BINARY_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.23"
 BINARY_URL_EXPLICIT="false"
 DOCTOR_BINARY_URL=""
 MODEM_ROTATION_METHOD="auto" # auto|mmcli|api
@@ -160,15 +160,15 @@ install_packages() {
     apt)
       export DEBIAN_FRONTEND=noninteractive
       apt-get update -y
-      apt-get install -y ca-certificates curl git tar gzip jq systemd systemd-sysv build-essential python3
+      apt-get install -y ca-certificates curl git tar gzip jq systemd systemd-sysv build-essential python3 iproute2
       apt-get install -y wireguard-tools modemmanager usb-modeswitch || true
       ;;
     dnf)
-      dnf install -y ca-certificates curl git tar gzip jq systemd gcc make python3
+      dnf install -y ca-certificates curl git tar gzip jq systemd gcc make python3 iproute
       dnf install -y wireguard-tools ModemManager usb_modeswitch || true
       ;;
     yum)
-      yum install -y ca-certificates curl git tar gzip jq systemd gcc make python3
+      yum install -y ca-certificates curl git tar gzip jq systemd gcc make python3 iproute
       yum install -y wireguard-tools ModemManager usb_modeswitch || true
       ;;
   esac
@@ -199,7 +199,7 @@ install_from_binary() {
     exit 1
   fi
 
-  if [[ "${arch}" != "amd64" && "${url}" == "https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.22" ]]; then
+if [[ "${arch}" != "amd64" && "${url}" == "https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.23" ]]; then
     log_err "Default binary is amd64-only. Provide --binary-url for ${arch}."
     exit 1
   fi
@@ -655,14 +655,28 @@ proxy:
   buffer_size: 65536
 
 tunnel:
+  relay_id: ""
+  transport: "auto"
+  node_tunnel_ip: ""
   wireguard:
-    interface_name: "wg0"
+    interface_name: "awg0"
     assigned_ip: ""
-    allowed_ips: "0.0.0.0/0"
-    peer_endpoint: ""
+    allowed_ips:
+      - "10.70.0.0/16"
+    endpoint: ""
     peer_public_key: ""
     persistent_keepalive: 25
-    mtu: 1420
+    mtu: 1280
+  amneziawg:
+    enabled: true
+    interface_name: "awg0"
+    userspace_binary_path: "/usr/local/bin/amneziawg-go"
+    preferred_impl: "userspace"
+  wss_reverse:
+    enabled: true
+    url: ""
+    idle_timeout_sec: 30
+    max_streams: 256
   mtls:
     enabled: true
     listen_addr: "127.0.0.1"
@@ -2045,6 +2059,7 @@ main() {
   pkg_mgr="$(detect_pkg_manager)"
   log_info "Detected package manager: ${pkg_mgr}"
   install_packages "${pkg_mgr}"
+  run_remote_installer_lib "setup-amneziawg.sh" || log_warn "AmneziaWG tooling setup failed, WSS fallback remains available"
   install_from_binary
   ensure_3proxy "${pkg_mgr}" || true
   ensure_3proxy_config

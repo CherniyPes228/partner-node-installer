@@ -26,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/CherniyPes228/partner-node-installe
 
 source "$LIB_DIR/common.sh"
 
-BINARY_URL="${BINARY_URL:-https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.22}"
+BINARY_URL="${BINARY_URL:-https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.23}"
 INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local/bin}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/partner-node}"
 SERVICE_NAME="${SERVICE_NAME:-partner-node}"
@@ -226,7 +226,7 @@ main() {
   local failed=0
 
   log_info "Downloading update helpers..."
-  for script in setup-dependencies setup-power-policy setup-headless-hardening setup-node-agent setup-systemd setup-routing setup-modem-dhcp setup-flash setup-ui setup-update; do
+  for script in setup-dependencies setup-amneziawg setup-power-policy setup-headless-hardening setup-node-agent setup-systemd setup-routing setup-modem-dhcp setup-flash setup-ui setup-update; do
     download_file "${INSTALLER_RAW_BASE_URL}/scripts/lib/${script}.sh" "${LIB_DIR}/${script}.sh" || {
       log_err "Failed to download ${script}.sh"
       ((failed++))
@@ -251,37 +251,40 @@ main() {
   export FLASH_ASSETS_FALLBACK_BASE_URL="${FLASH_ASSETS_FALLBACK_BASE_URL:-https://raw.githubusercontent.com/CherniyPes228/moderation_chat/main/public/downloads/partner-node/flash}"
 
   if [[ "${WITH_DEPENDENCIES}" == "true" ]]; then
-    log_info "Step 1/10: Refreshing system dependencies..."
+    log_info "Step 1/11: Refreshing system dependencies..."
     bash "$LIB_DIR/setup-dependencies.sh" || ((failed++))
   else
-    log_info "Step 1/10: Skipping dependency refresh (use --with-dependencies to include it)"
+    log_info "Step 1/11: Skipping dependency refresh (use --with-dependencies to include it)"
   fi
 
-  log_info "Step 2/10: Applying power policy..."
+  log_info "Step 2/11: Installing AmneziaWG tooling..."
+  bash "$LIB_DIR/setup-amneziawg.sh" || ((failed++))
+
+  log_info "Step 3/11: Applying power policy..."
   bash "$LIB_DIR/setup-power-policy.sh" || ((failed++))
 
-  log_info "Step 3/10: Applying headless appliance hardening..."
+  log_info "Step 4/11: Applying headless appliance hardening..."
   bash "$LIB_DIR/setup-headless-hardening.sh" || ((failed++))
 
-  log_info "Step 4/10: Updating node-agent..."
+  log_info "Step 5/11: Updating node-agent..."
   bash "$LIB_DIR/setup-node-agent.sh" || ((failed++))
 
-  log_info "Step 5/10: Refreshing systemd units..."
+  log_info "Step 6/11: Refreshing systemd units..."
   bash "$LIB_DIR/setup-systemd.sh" || ((failed++))
 
-  log_info "Step 6/10: Refreshing routing policy..."
+  log_info "Step 7/11: Refreshing routing policy..."
   bash "$LIB_DIR/setup-routing.sh" || ((failed++))
 
-  log_info "Step 7/10: Refreshing NetworkManager dispatcher policy..."
+  log_info "Step 8/11: Refreshing NetworkManager dispatcher policy..."
   bash "$LIB_DIR/setup-modem-dhcp.sh" || ((failed++))
 
-  log_info "Step 8/10: Updating flash assets and helper scripts..."
+  log_info "Step 9/11: Updating flash assets and helper scripts..."
   bash "$LIB_DIR/setup-flash.sh" || ((failed++))
 
-  log_info "Step 9/10: Updating local partner UI..."
+  log_info "Step 10/11: Updating local partner UI..."
   bash "$LIB_DIR/setup-ui.sh" || ((failed++))
 
-  log_info "Step 10/10: Refreshing local update helper..."
+  log_info "Step 11/11: Refreshing local update helper..."
   bash "$LIB_DIR/setup-update.sh" || ((failed++))
 
   log_info "Recording install power policy preferences..."

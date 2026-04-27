@@ -35,7 +35,7 @@ source "$LIB_DIR/common.sh"
 PARTNER_KEY=""
 MAIN_SERVER=""
 COUNTRY="${COUNTRY:-}"
-BINARY_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.22"
+BINARY_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.23"
 INSTALL_PREFIX="/usr/local/bin"
 CONFIG_DIR="/etc/partner-node"
 DATA_DIR="/var/lib/partner-node"
@@ -373,7 +373,7 @@ main() {
 
   # Download all lib scripts (for pipe mode)
   log_info "Downloading setup scripts..."
-  for script in setup-dependencies setup-power-policy setup-headless-hardening setup-3proxy setup-node-agent setup-config setup-systemd setup-routing setup-modem-dhcp setup-flash setup-ssh setup-ui setup-update; do
+  for script in setup-dependencies setup-amneziawg setup-power-policy setup-headless-hardening setup-3proxy setup-node-agent setup-config setup-systemd setup-routing setup-modem-dhcp setup-flash setup-ssh setup-ui setup-update; do
     download_file "https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main/scripts/lib/$script.sh" "$LIB_DIR/$script.sh" || {
       log_err "Failed to download $script.sh"
       ((failed++))
@@ -385,43 +385,46 @@ main() {
     exit 1
   fi
 
-  log_info "Step 1/13: Installing system dependencies..."
+  log_info "Step 1/14: Installing system dependencies..."
   bash "$LIB_DIR/setup-dependencies.sh" || ((failed++))
 
-  log_info "Step 2/13: Applying power policy..."
+  log_info "Step 2/14: Installing AmneziaWG tooling..."
+  bash "$LIB_DIR/setup-amneziawg.sh" || ((failed++))
+
+  log_info "Step 3/14: Applying power policy..."
   bash "$LIB_DIR/setup-power-policy.sh" || ((failed++))
 
-  log_info "Step 3/13: Applying headless appliance hardening..."
+  log_info "Step 4/14: Applying headless appliance hardening..."
   bash "$LIB_DIR/setup-headless-hardening.sh" || ((failed++))
 
-  log_info "Step 4/13: Setting up 3proxy..."
+  log_info "Step 5/14: Setting up 3proxy..."
   bash "$LIB_DIR/setup-3proxy.sh" || ((failed++))
 
-  log_info "Step 5/13: Downloading node-agent..."
+  log_info "Step 6/14: Downloading node-agent..."
   bash "$LIB_DIR/setup-node-agent.sh" || ((failed++))
 
-  log_info "Step 6/13: Creating configuration..."
+  log_info "Step 7/14: Creating configuration..."
   bash "$LIB_DIR/setup-config.sh" || ((failed++))
 
-  log_info "Step 7/13: Setting up systemd units..."
+  log_info "Step 8/14: Setting up systemd units..."
   bash "$LIB_DIR/setup-systemd.sh" || ((failed++))
 
-  log_info "Step 8/13: Configuring routing (Ethernet primary, Wi-Fi fallback, modem for proxy)..."
+  log_info "Step 9/14: Configuring routing (Ethernet primary, Wi-Fi fallback, modem for proxy)..."
   bash "$LIB_DIR/setup-routing.sh" || ((failed++))
 
-  log_info "Step 9/13: Configuring NetworkManager dispatcher for modem/uplink reconcile..."
+  log_info "Step 10/14: Configuring NetworkManager dispatcher for modem/uplink reconcile..."
   bash "$LIB_DIR/setup-modem-dhcp.sh" || ((failed++))
 
-  log_info "Step 10/13: Installing safe flash assets..."
+  log_info "Step 11/14: Installing safe flash assets..."
   bash "$LIB_DIR/setup-flash.sh" || ((failed++))
 
-  log_info "Step 11/13: Setting up SSH support access..."
+  log_info "Step 12/14: Setting up SSH support access..."
   bash "$LIB_DIR/setup-ssh.sh" || ((failed++))
 
-  log_info "Step 12/13: Setting up local partner UI..."
+  log_info "Step 13/14: Setting up local partner UI..."
   bash "$LIB_DIR/setup-ui.sh" || ((failed++))
 
-  log_info "Step 13/13: Installing local update helper..."
+  log_info "Step 14/14: Installing local update helper..."
   bash "$LIB_DIR/setup-update.sh" || ((failed++))
 
   log_info "Recording install power policy preferences..."

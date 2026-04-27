@@ -94,6 +94,30 @@ proxy:
   config_path: "/etc/3proxy/3proxy.conf"
   base_port: 31000
 
+tunnel:
+  relay_id: ""
+  transport: "auto"
+  node_tunnel_ip: ""
+  wireguard:
+    interface_name: "awg0"
+    assigned_ip: ""
+    endpoint: ""
+    peer_public_key: ""
+    allowed_ips:
+      - "10.70.0.0/16"
+    persistent_keepalive: 25
+    mtu: 1280
+  amneziawg:
+    enabled: true
+    interface_name: "awg0"
+    userspace_binary_path: "/usr/local/bin/amneziawg-go"
+    preferred_impl: "userspace"
+  wss_reverse:
+    enabled: true
+    url: ""
+    idle_timeout_sec: 30
+    max_streams: 256
+
 logging:
   level: "info"
   format: "json"
