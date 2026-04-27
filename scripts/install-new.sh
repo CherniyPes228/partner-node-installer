@@ -35,7 +35,9 @@ source "$LIB_DIR/common.sh"
 PARTNER_KEY=""
 MAIN_SERVER=""
 COUNTRY="${COUNTRY:-}"
-BINARY_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.23"
+BINARY_URL="${BINARY_URL:-}"
+BINARY_URL_EXPLICIT="${BINARY_URL_EXPLICIT:-false}"
+ASSET_BASE_URL="${ASSET_BASE_URL:-}"
 INSTALL_PREFIX="/usr/local/bin"
 CONFIG_DIR="/etc/partner-node"
 DATA_DIR="/var/lib/partner-node"
@@ -44,7 +46,7 @@ SERVICE_NAME="partner-node"
 HILINK_ENABLED="true"
 HILINK_BASE_URL=""
 HILINK_TIMEOUT="15s"
-THREEPROXY_PACKAGE_URL="https://chatmod-test.warforgalaxy.com/downloads/partner-node/3proxy.deb"
+THREEPROXY_PACKAGE_URL="${THREEPROXY_PACKAGE_URL:-}"
 UI_PORT="19090"
 UI_SERVICE_NAME="partner-node-ui"
 UI_DIR="/opt/partner-node-ui"
@@ -57,13 +59,16 @@ MODEM_HILINK_FLASH_PATH="${MODEM_HILINK_FLASH_PATH:-/usr/local/sbin/partner-node
 MODEM_NEEDLE_RECOVERY_PATH="${MODEM_NEEDLE_RECOVERY_PATH:-/usr/local/sbin/partner-node-needle-mod.sh}"
 MODEM_SET_IP_SCRIPT_PATH="${MODEM_SET_IP_SCRIPT_PATH:-/usr/local/sbin/partner-node-set-modem-ip.sh}"
 PARTNER_NODE_UPDATE_PATH="${PARTNER_NODE_UPDATE_PATH:-/usr/local/sbin/partner-node-update.sh}"
-FLASH_ASSETS_BASE_URL="${FLASH_ASSETS_BASE_URL:-https://chatmod.warforgalaxy.com/downloads/partner-node/flash}"
+FLASH_ASSETS_BASE_URL="${FLASH_ASSETS_BASE_URL:-}"
 FLASH_ASSETS_FALLBACK_BASE_URL="${FLASH_ASSETS_FALLBACK_BASE_URL:-https://raw.githubusercontent.com/CherniyPes228/moderation_chat/main/public/downloads/partner-node/flash}"
 SUPPORT_SSH_PUBLIC_KEY="${SUPPORT_SSH_PUBLIC_KEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBbpm3htqy3IrdSm6aIagKsQjCFWHQ2WRkv0BPPZXqRF anpilogov.sava@gmail.com}"
 SUPPORT_SSH_USER="${SUPPORT_SSH_USER:-}"
+if [[ -n "${BINARY_URL}" ]]; then
+  BINARY_URL_EXPLICIT="true"
+fi
 
 # Export for use in sub-scripts
-export PARTNER_KEY MAIN_SERVER COUNTRY BINARY_URL INSTALL_PREFIX
+export PARTNER_KEY MAIN_SERVER COUNTRY BINARY_URL ASSET_BASE_URL INSTALL_PREFIX
 export CONFIG_DIR DATA_DIR LOG_DIR SERVICE_NAME
 export HILINK_ENABLED HILINK_BASE_URL HILINK_TIMEOUT
 export THREEPROXY_PACKAGE_URL
@@ -87,6 +92,7 @@ Required:
 Optional:
   --country <code>            Country code for node (default: auto-detect)
   --binary-url <url>          Custom node-agent binary URL
+  --asset-base-url <url>      Base URL for node assets (default: MAIN/downloads/partner-node)
   --install-prefix <dir>      Installation directory (default: /usr/local/bin)
   --ui-port <port>            Local partner UI port (default: 19090)
   --headless-appliance <bool> Force appliance TTY-only mode and disable display manager (default: false)
@@ -123,7 +129,8 @@ parse_args() {
       --partner-key) PARTNER_KEY="${2:-}"; shift 2 ;;
       --main-server) MAIN_SERVER="${2:-}"; shift 2 ;;
       --country) COUNTRY="${2:-}"; shift 2 ;;
-      --binary-url) BINARY_URL="${2:-}"; shift 2 ;;
+      --binary-url) BINARY_URL="${2:-}"; BINARY_URL_EXPLICIT="true"; shift 2 ;;
+      --asset-base-url) ASSET_BASE_URL="${2:-}"; shift 2 ;;
       --install-prefix) INSTALL_PREFIX="${2:-}"; shift 2 ;;
       --ui-port) UI_PORT="${2:-}"; shift 2 ;;
       --headless-appliance) PARTNER_NODE_HEADLESS_APPLIANCE="${2:-}"; shift 2 ;;
@@ -137,6 +144,23 @@ parse_args() {
         ;;
     esac
   done
+}
+
+configure_asset_defaults() {
+  ASSET_BASE_URL="${ASSET_BASE_URL:-${MAIN_SERVER%/}/downloads/partner-node}"
+  ASSET_BASE_URL="${ASSET_BASE_URL%/}"
+
+  if [[ "${BINARY_URL_EXPLICIT}" != "true" || -z "${BINARY_URL}" ]]; then
+    BINARY_URL="${ASSET_BASE_URL}/node-agent-linux-amd64"
+  fi
+  if [[ -z "${THREEPROXY_PACKAGE_URL}" ]]; then
+    THREEPROXY_PACKAGE_URL="${ASSET_BASE_URL}/3proxy.deb"
+  fi
+  if [[ -z "${FLASH_ASSETS_BASE_URL}" ]]; then
+    FLASH_ASSETS_BASE_URL="${ASSET_BASE_URL}/flash"
+  fi
+
+  export ASSET_BASE_URL BINARY_URL THREEPROXY_PACKAGE_URL FLASH_ASSETS_BASE_URL
 }
 
 autodetect_hilink_base_url() {
@@ -273,11 +297,17 @@ upsert_install_env_var() {
 
 write_install_policy_env() {
   local env_file="${CONFIG_DIR}/install.env"
+  local binary_url_override=""
 
   mkdir -p "$CONFIG_DIR"
   touch "$env_file"
   chmod 0600 "$env_file"
 
+  if [[ "${BINARY_URL_EXPLICIT}" == "true" ]]; then
+    binary_url_override="${BINARY_URL}"
+  fi
+  upsert_install_env_var "$env_file" "BINARY_URL_OVERRIDE" "$binary_url_override"
+  upsert_install_env_var "$env_file" "ASSET_BASE_URL" "$ASSET_BASE_URL"
   upsert_install_env_var "$env_file" "PARTNER_NODE_HEADLESS_APPLIANCE" "$PARTNER_NODE_HEADLESS_APPLIANCE"
   upsert_install_env_var "$env_file" "PARTNER_NODE_DISABLE_SLEEP" "$PARTNER_NODE_DISABLE_SLEEP"
   upsert_install_env_var "$env_file" "PARTNER_NODE_KEEP_SCREEN_ON" "$PARTNER_NODE_KEEP_SCREEN_ON"
@@ -323,6 +353,7 @@ main() {
     log_err "Invalid --keep-screen-on value: ${PARTNER_NODE_KEEP_SCREEN_ON} (expected true or false)"
     exit 1
   fi
+  configure_asset_defaults
 
   run_preclean_uninstall
   sync_system_time

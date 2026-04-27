@@ -26,7 +26,9 @@ curl -fsSL https://raw.githubusercontent.com/CherniyPes228/partner-node-installe
 
 source "$LIB_DIR/common.sh"
 
-BINARY_URL="${BINARY_URL:-https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.23}"
+BINARY_URL="${BINARY_URL:-}"
+BINARY_URL_EXPLICIT="${BINARY_URL_EXPLICIT:-false}"
+ASSET_BASE_URL="${ASSET_BASE_URL:-}"
 INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local/bin}"
 CONFIG_DIR="${CONFIG_DIR:-/etc/partner-node}"
 SERVICE_NAME="${SERVICE_NAME:-partner-node}"
@@ -41,6 +43,9 @@ PARTNER_NODE_KEEP_SCREEN_ON="${PARTNER_NODE_KEEP_SCREEN_ON:-}"
 PARTNER_NODE_UPDATE_PATH="${PARTNER_NODE_UPDATE_PATH:-/usr/local/sbin/partner-node-update.sh}"
 INSTALLER_RAW_BASE_URL="${INSTALLER_RAW_BASE_URL:-https://raw.githubusercontent.com/CherniyPes228/partner-node-installer/main}"
 WITH_DEPENDENCIES="false"
+if [[ -n "${BINARY_URL}" ]]; then
+  BINARY_URL_EXPLICIT="true"
+fi
 
 usage() {
   cat <<EOF
@@ -50,6 +55,7 @@ Usage: $0 [OPTIONS]
 
 Optional:
   --binary-url <url>          Custom node-agent binary URL
+  --asset-base-url <url>      Base URL for node assets (default: MAIN/downloads/partner-node)
   --main-server <url>         Override MAIN server from installed config
   --partner-key <key>         Override partner key from installed config
   --ui-port <port>            Override local UI port (default: from installed ui.env or 19090)
@@ -69,7 +75,8 @@ EOF
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --binary-url) BINARY_URL="${2:-}"; shift 2 ;;
+      --binary-url) BINARY_URL="${2:-}"; BINARY_URL_EXPLICIT="true"; shift 2 ;;
+      --asset-base-url) ASSET_BASE_URL="${2:-}"; shift 2 ;;
       --main-server) MAIN_SERVER="${2:-}"; shift 2 ;;
       --partner-key) PARTNER_KEY="${2:-}"; shift 2 ;;
       --ui-port) UI_PORT="${2:-}"; shift 2 ;;
@@ -85,6 +92,20 @@ parse_args() {
         ;;
     esac
   done
+}
+
+configure_asset_defaults() {
+  ASSET_BASE_URL="${ASSET_BASE_URL:-${MAIN_SERVER%/}/downloads/partner-node}"
+  ASSET_BASE_URL="${ASSET_BASE_URL%/}"
+
+  if [[ "${BINARY_URL_EXPLICIT}" != "true" || -z "${BINARY_URL}" ]]; then
+    BINARY_URL="${ASSET_BASE_URL}/node-agent-linux-amd64"
+  fi
+  if [[ -z "${FLASH_ASSETS_BASE_URL:-}" ]]; then
+    FLASH_ASSETS_BASE_URL="${ASSET_BASE_URL}/flash"
+  fi
+
+  export ASSET_BASE_URL BINARY_URL FLASH_ASSETS_BASE_URL
 }
 
 read_yaml_scalar() {
@@ -135,6 +156,15 @@ load_existing_install_context() {
   fi
   if [[ -z "${PARTNER_NODE_KEEP_SCREEN_ON}" ]]; then
     PARTNER_NODE_KEEP_SCREEN_ON="$(read_env_scalar "$install_env_file" "PARTNER_NODE_KEEP_SCREEN_ON" | tr -d '\r')"
+  fi
+  if [[ -z "${BINARY_URL}" ]]; then
+    BINARY_URL="$(read_env_scalar "$install_env_file" "BINARY_URL_OVERRIDE" | tr -d '\r')"
+    if [[ -n "${BINARY_URL}" ]]; then
+      BINARY_URL_EXPLICIT="true"
+    fi
+  fi
+  if [[ -z "${ASSET_BASE_URL}" ]]; then
+    ASSET_BASE_URL="$(read_env_scalar "$install_env_file" "ASSET_BASE_URL" | tr -d '\r')"
   fi
   if [[ -z "${UI_PORT}" ]]; then
     UI_PORT="19090"
@@ -198,11 +228,17 @@ upsert_install_env_var() {
 
 write_install_policy_env() {
   local env_file="${CONFIG_DIR}/install.env"
+  local binary_url_override=""
 
   mkdir -p "$CONFIG_DIR"
   touch "$env_file"
   chmod 0600 "$env_file"
 
+  if [[ "${BINARY_URL_EXPLICIT}" == "true" ]]; then
+    binary_url_override="${BINARY_URL}"
+  fi
+  upsert_install_env_var "$env_file" "BINARY_URL_OVERRIDE" "$binary_url_override"
+  upsert_install_env_var "$env_file" "ASSET_BASE_URL" "$ASSET_BASE_URL"
   upsert_install_env_var "$env_file" "PARTNER_NODE_HEADLESS_APPLIANCE" "$PARTNER_NODE_HEADLESS_APPLIANCE"
   upsert_install_env_var "$env_file" "PARTNER_NODE_DISABLE_SLEEP" "$PARTNER_NODE_DISABLE_SLEEP"
   upsert_install_env_var "$env_file" "PARTNER_NODE_KEEP_SCREEN_ON" "$PARTNER_NODE_KEEP_SCREEN_ON"
@@ -215,6 +251,7 @@ main() {
   require_root
   parse_args "$@"
   load_existing_install_context
+  configure_asset_defaults
 
   log_info "╔════════════════════════════════════════════════════════════╗"
   log_info "║                Partner Node In-Place Update               ║"
@@ -238,7 +275,7 @@ main() {
     exit 1
   fi
 
-  export BINARY_URL INSTALL_PREFIX CONFIG_DIR SERVICE_NAME UI_SERVICE_NAME UI_DIR UI_PORT
+  export BINARY_URL ASSET_BASE_URL INSTALL_PREFIX CONFIG_DIR SERVICE_NAME UI_SERVICE_NAME UI_DIR UI_PORT
   export PARTNER_NODE_HEADLESS_APPLIANCE
   export PARTNER_NODE_DISABLE_SLEEP PARTNER_NODE_KEEP_SCREEN_ON
   export MAIN_SERVER PARTNER_KEY INSTALLER_RAW_BASE_URL PARTNER_NODE_UPDATE_PATH
@@ -247,7 +284,7 @@ main() {
   export MODEM_HILINK_FLASH_PATH="${MODEM_HILINK_FLASH_PATH:-/usr/local/sbin/partner-node-flash-hilink.sh}"
   export MODEM_NEEDLE_RECOVERY_PATH="${MODEM_NEEDLE_RECOVERY_PATH:-/usr/local/sbin/partner-node-needle-mod.sh}"
   export MODEM_SET_IP_SCRIPT_PATH="${MODEM_SET_IP_SCRIPT_PATH:-/usr/local/sbin/partner-node-set-modem-ip.sh}"
-  export FLASH_ASSETS_BASE_URL="${FLASH_ASSETS_BASE_URL:-https://chatmod.warforgalaxy.com/downloads/partner-node/flash}"
+  export FLASH_ASSETS_BASE_URL
   export FLASH_ASSETS_FALLBACK_BASE_URL="${FLASH_ASSETS_FALLBACK_BASE_URL:-https://raw.githubusercontent.com/CherniyPes228/moderation_chat/main/public/downloads/partner-node/flash}"
 
   if [[ "${WITH_DEPENDENCIES}" == "true" ]]; then

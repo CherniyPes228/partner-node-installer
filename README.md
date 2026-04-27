@@ -10,10 +10,10 @@ curl -fsSL https://raw.githubusercontent.com/<org>/partner-node-installer/main/s
   --main-server http://<main-server-ip>:18080
 ```
 
-Default binary URL already points to:
-`https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.1.19`
+By default the installer downloads node assets from the MAIN server domain:
+`<main-server>/downloads/partner-node/node-agent-linux-amd64`.
 
-If you host another build, override with `--binary-url`.
+If you host another build, override with `--binary-url` or `--asset-base-url`.
 
 ## What It Does
 
@@ -37,9 +37,10 @@ If you host another build, override with `--binary-url`.
 - `--partner-key` (required in non-interactive mode)
 - `--country` (optional; auto-detected from public IP, fallback `US`)
 - `--main-server` (required in non-interactive mode)
-- `--binary-url` (optional; default is test host URL above)
+- `--binary-url` (optional; direct node-agent binary URL)
+- `--asset-base-url` (optional; default: `<main-server>/downloads/partner-node`)
 - `--threeproxy-package-url` (optional custom URL to 3proxy package)
-  Default: `https://chatmod.warforgalaxy.com/downloads/partner-node/3proxy.deb`
+  Default: `<asset-base-url>/3proxy.deb`
 - `--skip-firewall` (optional; disable installer firewall hardening)
 - `--ui-port` (optional; local UI port, default `19090`)
 - `--auto-update-enabled` (`true`/`false`, default `false`)
@@ -67,8 +68,8 @@ Local dashboard URL (on partner machine):
 ## Notes
 
 - The script is intended for Linux partner nodes.
-- Provide real download URLs before production use.
-- Keep installer and binaries behind HTTPS with integrity verification in production.
+- Keep installer and binaries behind HTTPS.
+- Publish `node-agent-linux-amd64.sha256` and `node-agent-linux-amd64.version` next to the binary for release verification.
 
 
 

@@ -11,8 +11,9 @@ set -euo pipefail
 PARTNER_KEY=""
 COUNTRY=""
 MAIN_SERVER=""
-BINARY_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.23"
-BINARY_URL_EXPLICIT="false"
+BINARY_URL="${BINARY_URL:-}"
+BINARY_URL_EXPLICIT="${BINARY_URL_EXPLICIT:-false}"
+ASSET_BASE_URL="${ASSET_BASE_URL:-}"
 DOCTOR_BINARY_URL=""
 MODEM_ROTATION_METHOD="auto" # auto|mmcli|api
 HILINK_ENABLED="true"
@@ -21,7 +22,7 @@ HILINK_TIMEOUT="15s"
 MODEM_FLASH_ENABLED="true"
 FLASH_ASSETS_BASE_URL=""  # Will be set if modem flashing is enabled
 THREEPROXY_VERSION="0.9.5"
-THREEPROXY_PACKAGE_URL="https://chatmod.warforgalaxy.com/downloads/partner-node/3proxy.deb"
+THREEPROXY_PACKAGE_URL="${THREEPROXY_PACKAGE_URL:-}"
 INSTALL_PREFIX="/usr/local/bin"
 CONFIG_DIR="/etc/partner-node"
 DATA_DIR="/var/lib/partner-node"
@@ -42,6 +43,9 @@ INSTALLER_URL="https://raw.githubusercontent.com/CherniyPes228/partner-node-inst
 RUN_USER="partner-node"
 SKIP_START="false"
 SKIP_FIREWALL="false"
+if [[ -n "${BINARY_URL}" ]]; then
+  BINARY_URL_EXPLICIT="true"
+fi
 
 RED="\033[0;31m"
 GREEN="\033[0;32m"
@@ -87,6 +91,7 @@ Optional:
   --country <code>                Optional; auto-detected from public IP (fallback: US)
   --main-server <url>             Required in non-interactive mode
   --binary-url <url>              Direct URL to node-agent binary
+  --asset-base-url <url>          Base URL for node assets (default: MAIN/downloads/partner-node)
   --modem-rotation-method <m>     auto|mmcli|api|api_reboot (default: auto)
   --hilink-enabled <true|false>   Default: true
   --hilink-base-url <url>         Example: http://192.168.13.1
@@ -199,7 +204,7 @@ install_from_binary() {
     exit 1
   fi
 
-if [[ "${arch}" != "amd64" && "${url}" == "https://chatmod.warforgalaxy.com/downloads/partner-node/node-agent-linux-amd64-v0.5.23" ]]; then
+  if [[ "${arch}" != "amd64" && "${url}" == "${ASSET_BASE_URL%/}/node-agent-linux-amd64" ]]; then
     log_err "Default binary is amd64-only. Provide --binary-url for ${arch}."
     exit 1
   fi
@@ -1773,6 +1778,7 @@ PARTNER_NODE_HEADLESS_APPLIANCE="${PARTNER_NODE_HEADLESS_APPLIANCE}"
 PARTNER_NODE_DISABLE_SLEEP="${PARTNER_NODE_DISABLE_SLEEP}"
 PARTNER_NODE_KEEP_SCREEN_ON="${PARTNER_NODE_KEEP_SCREEN_ON}"
 BINARY_URL_OVERRIDE="${binary_url_override}"
+ASSET_BASE_URL="${ASSET_BASE_URL}"
 DOCTOR_BINARY_URL="${DOCTOR_BINARY_URL}"
 MODEM_ROTATION_METHOD="${MODEM_ROTATION_METHOD}"
 HILINK_ENABLED="${HILINK_ENABLED}"
@@ -1859,6 +1865,7 @@ ARGS=(
 
 if [[ -n "${COUNTRY:-}" ]]; then ARGS+=(--country "${COUNTRY}"); fi
 if [[ -n "${BINARY_URL_OVERRIDE:-}" ]]; then ARGS+=(--binary-url "${BINARY_URL_OVERRIDE}"); fi
+if [[ -n "${ASSET_BASE_URL:-}" ]]; then ARGS+=(--asset-base-url "${ASSET_BASE_URL}"); fi
 if [[ -n "${DOCTOR_BINARY_URL:-}" ]]; then ARGS+=(--doctor-binary-url "${DOCTOR_BINARY_URL}"); fi
 if [[ -n "${HILINK_BASE_URL:-}" ]]; then ARGS+=(--hilink-base-url "${HILINK_BASE_URL}"); fi
 if [[ -n "${THREEPROXY_PACKAGE_URL:-}" ]]; then ARGS+=(--threeproxy-package-url "${THREEPROXY_PACKAGE_URL}"); fi
@@ -1974,6 +1981,7 @@ parse_args() {
       --country) COUNTRY="${2:-}"; shift 2 ;;
       --main-server) MAIN_SERVER="${2:-}"; shift 2 ;;
       --binary-url) BINARY_URL="${2:-}"; BINARY_URL_EXPLICIT="true"; shift 2 ;;
+      --asset-base-url) ASSET_BASE_URL="${2:-}"; shift 2 ;;
       --modem-rotation-method) MODEM_ROTATION_METHOD="${2:-}"; shift 2 ;;
       --hilink-enabled) HILINK_ENABLED="${2:-}"; shift 2 ;;
       --hilink-base-url) HILINK_BASE_URL="${2:-}"; shift 2 ;;
@@ -2000,6 +2008,21 @@ parse_args() {
         ;;
     esac
   done
+}
+
+configure_asset_defaults() {
+  ASSET_BASE_URL="${ASSET_BASE_URL:-${MAIN_SERVER%/}/downloads/partner-node}"
+  ASSET_BASE_URL="${ASSET_BASE_URL%/}"
+
+  if [[ "${BINARY_URL_EXPLICIT}" != "true" || -z "${BINARY_URL}" ]]; then
+    BINARY_URL="${ASSET_BASE_URL}/node-agent-linux-amd64"
+  fi
+  if [[ -z "${THREEPROXY_PACKAGE_URL}" ]]; then
+    THREEPROXY_PACKAGE_URL="${ASSET_BASE_URL}/3proxy.deb"
+  fi
+  if [[ -z "${FLASH_ASSETS_BASE_URL}" ]]; then
+    FLASH_ASSETS_BASE_URL="${ASSET_BASE_URL}/flash"
+  fi
 }
 
 main() {
@@ -2053,6 +2076,7 @@ main() {
     log_err "--installer-url cannot be empty."
     exit 1
   fi
+  configure_asset_defaults
 
   log_info "Starting partner-node zero-touch installation"
   local pkg_mgr
