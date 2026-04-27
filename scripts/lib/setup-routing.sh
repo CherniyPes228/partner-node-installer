@@ -116,13 +116,31 @@ is_huawei_iface() {
 }
 
 list_huawei_ifaces() {
-  local iface
+  local iface seen
+  declare -A seen=()
   for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}'); do
     [[ "${iface}" == "lo" ]] && continue
     if is_huawei_iface "${iface}"; then
+      seen["${iface}"]=1
       echo "${iface}"
     fi
   done
+  # Some flashed HiLink USB NICs are renamed to generic ethX/enx names where
+  # sysfs vendor lookup is not reliable. Treat the modem management subnet as
+  # proxy-only too, so DHCP cannot leave a host default route via the SIM.
+  while IFS= read -r iface; do
+    [[ -n "${iface}" && -z "${seen[${iface}]:-}" ]] || continue
+    seen["${iface}"]=1
+    echo "${iface}"
+  done < <(ip -4 -o addr show scope global 2>/dev/null | awk '
+    {
+      iface=$2
+      split($4, cidr, "/")
+      split(cidr[1], oct, ".")
+      if (oct[1] == "192" && oct[2] == "168" && oct[4] == "100" && (oct[3] == "8" || (oct[3] >= 100 && oct[3] <= 199))) {
+        print iface
+      }
+    }')
 }
 
 list_non_huawei_ifaces() {

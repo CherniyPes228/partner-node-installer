@@ -401,6 +401,7 @@ def ensure_usage_record(state, modem):
             "cycle_used_bytes": int(modem.get("cycle_used_bytes") or 0),
             "traffic_bytes_in": int(modem.get("traffic_bytes_in") or 0),
             "traffic_bytes_out": int(modem.get("traffic_bytes_out") or 0),
+            "traffic_source": str(modem.get("traffic_source") or "").strip(),
             "quota_exhausted": bool(modem.get("quota_exhausted")),
             "updated_at": utc_now_iso(),
         }
@@ -436,12 +437,31 @@ def cycle_limit_bytes(record):
 def apply_usage_record_to_modem(modem, record):
     if not isinstance(modem, dict) or not isinstance(record, dict):
         return modem
+    source = str(record.get("traffic_source") or modem.get("traffic_source") or "").strip()
+    if source == "interface_counters" and (
+        str(modem.get("usb_mode") or "").strip().lower() == "hilink"
+        or str(modem.get("local_base_url") or "").strip()
+        or "hilink" in str(modem.get("id") or "").strip().lower()
+    ):
+        record["legacy_interface_cycle_used_bytes"] = int(record.get("legacy_interface_cycle_used_bytes") or record.get("cycle_used_bytes") or 0)
+        record["cycle_used_bytes"] = 0
+        record["traffic_bytes_in"] = 0
+        record["traffic_bytes_out"] = 0
+        record["proxy_client_bytes"] = 0
+        record["traffic_source"] = "rebaseline_pending"
+        record["quota_exhausted"] = False
+        record["quota_block_reason"] = ""
     used = int(record.get("cycle_used_bytes") or 0)
     limit = cycle_limit_bytes(record)
     exhausted = bool(record.get("quota_exhausted")) or (limit > 0 and used >= limit)
     modem["traffic_bytes_in"] = int(record.get("traffic_bytes_in") or 0)
     modem["traffic_bytes_out"] = int(record.get("traffic_bytes_out") or 0)
     modem["cycle_used_bytes"] = used
+    modem["proxy_client_bytes"] = int(record.get("proxy_client_bytes") or 0)
+    modem["hilink_wan_bytes"] = int(record.get("hilink_wan_bytes") or 0)
+    modem["local_interface_bytes"] = int(record.get("local_interface_bytes") or 0)
+    modem["unattributed_wan_bytes"] = int(record.get("unattributed_wan_bytes") or 0)
+    modem["legacy_interface_cycle_used_bytes"] = int(record.get("legacy_interface_cycle_used_bytes") or 0)
     modem["cycle_limit_bytes"] = limit
     modem["cycle_mode"] = normalize_cycle_mode(record.get("cycle_mode"))
     modem["cycle_start_at"] = record.get("cycle_start_at") or record.get("cycle_anchor_at") or ""
@@ -450,7 +470,7 @@ def apply_usage_record_to_modem(modem, record):
     modem["quota_exhausted"] = exhausted
     modem["quota_block_reason"] = record.get("quota_block_reason") or ("traffic quota exhausted" if exhausted else "")
     modem["traffic_source"] = record.get("traffic_source") or ""
-    modem["traffic_sampled_at"] = record.get("last_counter_sample_at") or record.get("traffic_sampled_at") or ""
+    modem["traffic_sampled_at"] = record.get("last_hilink_sample_at") or record.get("last_counter_sample_at") or record.get("traffic_sampled_at") or ""
     if exhausted:
         modem["client_eligible"] = False
     return modem
@@ -487,7 +507,7 @@ def apply_local_usage_to_overview(overview):
                 apply_usage_record_to_modem(modem, record)
             key = modem_usage_key(node_id, modem.get("id"), modem.get("imei"))
             if key and key in by_key:
-                by_key[key].update({k: v for k, v in modem.items() if k.startswith("cycle_") or k.startswith("quota_") or k in ("traffic_bytes_in", "traffic_bytes_out", "remaining_bytes", "client_eligible", "traffic_source", "traffic_sampled_at")})
+                by_key[key].update({k: v for k, v in modem.items() if k.startswith("cycle_") or k.startswith("quota_") or k in ("traffic_bytes_in", "traffic_bytes_out", "proxy_client_bytes", "hilink_wan_bytes", "local_interface_bytes", "unattributed_wan_bytes", "legacy_interface_cycle_used_bytes", "remaining_bytes", "client_eligible", "traffic_source", "traffic_sampled_at")})
     if set((state.get("modems") or {}).keys()) != initial_usage_keys:
         try:
             write_local_modem_usage_state(state)
@@ -527,11 +547,16 @@ def build_local_modem_billing(overview):
             "next_reset_at": record.get("next_reset_at") or "",
             "cycle_used_bytes": used,
             "cycle_limit_bytes": limit,
+            "proxy_client_bytes": int(record.get("proxy_client_bytes") or 0),
+            "hilink_wan_bytes": int(record.get("hilink_wan_bytes") or 0),
+            "local_interface_bytes": int(record.get("local_interface_bytes") or 0),
+            "unattributed_wan_bytes": int(record.get("unattributed_wan_bytes") or 0),
+            "legacy_interface_cycle_used_bytes": int(record.get("legacy_interface_cycle_used_bytes") or 0),
             "remaining_bytes": remaining,
             "quota_exhausted": exhausted,
             "quota_block_reason": record.get("quota_block_reason") or ("traffic quota exhausted" if exhausted else ""),
             "traffic_source": record.get("traffic_source") or "",
-            "traffic_sampled_at": record.get("last_counter_sample_at") or record.get("traffic_sampled_at") or "",
+            "traffic_sampled_at": record.get("last_hilink_sample_at") or record.get("last_counter_sample_at") or record.get("traffic_sampled_at") or "",
             "sim_needs_check": bool(modem.get("sim_needs_check")),
             "sim_quarantined": bool(modem.get("sim_quarantined")),
             "sim_check_status": modem.get("sim_check_status") or "",
@@ -584,9 +609,14 @@ def update_local_modem_billing(req):
         record["cycle_used_bytes"] = 0
         record["traffic_bytes_in"] = 0
         record["traffic_bytes_out"] = 0
+        record["proxy_client_bytes"] = 0
+        record["unattributed_wan_bytes"] = 0
         record.pop("last_counter_sample_at", None)
         record.pop("last_rx_bytes", None)
         record.pop("last_tx_bytes", None)
+        record.pop("last_hilink_sample_at", None)
+        record.pop("last_hilink_wan_bytes_in", None)
+        record.pop("last_hilink_wan_bytes_out", None)
     limit = cycle_limit_bytes(record)
     used = int(record.get("cycle_used_bytes") or 0)
     exhausted = limit > 0 and used >= limit

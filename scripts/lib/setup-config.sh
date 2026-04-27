@@ -100,8 +100,11 @@ tunnel:
   node_tunnel_ip: ""
   wireguard:
     interface_name: "awg0"
+    key_path: "$DATA_DIR/amneziawg/private.key"
+    public_key_path: "$DATA_DIR/amneziawg/public.key"
     assigned_ip: ""
     endpoint: ""
+    peer_endpoint: ""
     peer_public_key: ""
     allowed_ips:
       - "10.70.0.0/16"
@@ -110,6 +113,8 @@ tunnel:
   amneziawg:
     enabled: true
     interface_name: "awg0"
+    config_path: "/etc/amneziawg/awg0.conf"
+    server_ip: "10.70.0.1"
     userspace_binary_path: "/usr/local/bin/amneziawg-go"
     preferred_impl: "userspace"
   wss_reverse:
