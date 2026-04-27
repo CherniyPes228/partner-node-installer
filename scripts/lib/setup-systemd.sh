@@ -53,7 +53,7 @@ ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
 ProtectKernelTunables=yes
-ReadWritePaths=$CONFIG_DIR $DATA_DIR $LOG_DIR /etc/3proxy /var/log/3proxy
+ReadWritePaths=$CONFIG_DIR $DATA_DIR $LOG_DIR /etc/3proxy /var/log/3proxy /etc/amneziawg
 LimitNOFILE=65536
 LimitNPROC=512
 
