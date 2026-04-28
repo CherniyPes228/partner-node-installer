@@ -39,6 +39,7 @@ HILINK_PROBE_TIMEOUT = float(os.environ.get("PARTNER_HILINK_PROBE_TIMEOUT", "1.5
 OVERVIEW_CACHE_TTL = float(os.environ.get("PARTNER_OVERVIEW_CACHE_TTL", "3"))
 CLIENT_SOCKET_TIMEOUT = float(os.environ.get("PARTNER_UI_CLIENT_TIMEOUT", "15"))
 VERBOSE_UI_LOGS = os.environ.get("PARTNER_UI_VERBOSE_LOGS", "").strip().lower() in ("1", "true", "yes")
+LOCAL_MODEM_PROBES_ENABLED = os.environ.get("PARTNER_UI_LOCAL_MODEM_PROBES", "").strip().lower() in ("1", "true", "yes")
 
 ALLOWED = {
     "self_check",
@@ -501,6 +502,53 @@ def detect_local_live_modem(node_id, registry_by_node_imei, by_stable_key, flash
     return placeholder
 
 
+def local_modem_hint_from_state(node_id, by_stable_key, flashed):
+    notice = load_local_flash_notice()
+    if not isinstance(notice, dict):
+        return None
+    modem_id = str(notice.get("modem_id") or "").strip()
+    imei = normalize_digits(notice.get("imei"))
+    stable_key = f"imei:{imei}" if imei else ""
+    ordinal = int(notice.get("ordinal") or 0)
+    status = str(notice.get("status") or "").strip().lower()
+    completed = status == "completed"
+    local_flashed = (completed or bool(flashed.get(stable_key))) if stable_key else completed
+    if not (modem_id or imei or ordinal > 0):
+        return None
+    return {
+        "id": modem_id or (f"hilink-{ordinal}" if ordinal > 0 else "hilink0"),
+        "ordinal": ordinal,
+        "modem_number": ordinal,
+        "local_modem_number": int(by_stable_key.get(stable_key) or ordinal or 0) if stable_key else ordinal,
+        "known_to_node": bool(ordinal > 0 or stable_key in by_stable_key),
+        "local_flashed": local_flashed,
+        "node_id": node_id,
+        "node_status": "online",
+        "usb_vendor_id": "12d1",
+        "usb_product_id": "",
+        "usb_mode": "hilink",
+        "state": "ready" if completed else "detected",
+        "imei": imei,
+        "wan_ip": "",
+        "signal_strength": 0,
+        "operator": "",
+        "technology": "",
+        "active_sessions": 0,
+        "port": (31000 + ordinal) if ordinal > 0 else 0,
+        "client_eligible": True,
+        "traffic_bytes_in": 0,
+        "traffic_bytes_out": 0,
+        "flash_status": "done" if completed else status,
+        "flash_stage": "completed" if completed else status,
+        "flash_message": str(notice.get("message") or "").strip(),
+        "provision_status": "ready" if local_flashed else "requires_flash",
+        "provision_notes": str(notice.get("message") or "").strip() or "local modem state detected",
+        "last_seen_node_id": node_id,
+        "last_seen_modem_id": modem_id or "hilink0",
+        "local_modem_detected": True,
+    }
+
+
 def finalize_overview_shape(overview):
     overview.setdefault("partner_key", PARTNER_KEY)
     overview.setdefault("main_server", MAIN_SERVER)
@@ -581,6 +629,10 @@ def apply_local_flash_job(overview):
         job = None
     overview["flash_job"] = job or {}
     overview["flash_notice"] = notice or {}
+    if isinstance(notice, dict) and notice:
+        overview["local_modem_detected"] = True
+        overview["local_modem_status"] = str(notice.get("status") or "").strip()
+        overview["local_modem_message"] = str(notice.get("message") or "").strip()
 
     for modem in overview.get("modems", []) or []:
         if not isinstance(modem, dict):
@@ -829,8 +881,10 @@ def inject_local_runtime_state(overview):
                 node_id = str(node.get("node_id") or "").strip()
                 break
 
-    local_status = current_local_node_status()
-    local_modem = detect_local_live_modem(node_id, registry_by_node_imei, by_stable_key, flashed)
+    local_status = str(overview.get("node_status") or "").strip() or current_local_node_status()
+    local_modem = local_modem_hint_from_state(node_id, by_stable_key, flashed)
+    if local_modem is None and LOCAL_MODEM_PROBES_ENABLED:
+        local_modem = detect_local_live_modem(node_id, registry_by_node_imei, by_stable_key, flashed)
 
     nodes = overview.setdefault("nodes", [])
     modems = overview.setdefault("modems", [])
@@ -1014,7 +1068,6 @@ def rebuild_overview_snapshot():
     if isinstance(data, dict):
         data.setdefault("partner_key", PARTNER_KEY)
         data.setdefault("main_server", MAIN_SERVER)
-        enrich_overview_with_local_modem_state(data)
         inject_local_runtime_state(data)
         apply_local_flash_job(data)
         reconcile_aliases(data)
@@ -1022,22 +1075,22 @@ def rebuild_overview_snapshot():
 
 
 def refresh_overview_cache():
+    data = None
+    error = ""
     try:
         data = rebuild_overview_snapshot()
-        error = ""
     except Exception as err:
-        with OVERVIEW_CACHE_LOCK:
-            OVERVIEW_CACHE["refreshing"] = False
-            OVERVIEW_CACHE["error"] = str(err)
+        error = str(err)
         ui_log("overview refresh failed", error=str(err))
-        return
-
-    with OVERVIEW_CACHE_LOCK:
-        OVERVIEW_CACHE["data"] = data
-        OVERVIEW_CACHE["updated_at"] = time.time()
-        OVERVIEW_CACHE["refreshing"] = False
-        OVERVIEW_CACHE["error"] = error
-    ui_log("overview refresh complete", modem_count=len((data or {}).get("modems", []) or []), node_count=len((data or {}).get("nodes", []) or []))
+    finally:
+        with OVERVIEW_CACHE_LOCK:
+            if isinstance(data, dict):
+                OVERVIEW_CACHE["data"] = data
+                OVERVIEW_CACHE["updated_at"] = time.time()
+            OVERVIEW_CACHE["refreshing"] = False
+            OVERVIEW_CACHE["error"] = error
+    if isinstance(data, dict):
+        ui_log("overview refresh complete", modem_count=len((data or {}).get("modems", []) or []), node_count=len((data or {}).get("nodes", []) or []))
 
 
 def schedule_overview_refresh():
@@ -1163,6 +1216,15 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         super().end_headers()
         self.close_connection = True
+
+    def handle_one_request(self):
+        started = time.time()
+        try:
+            super().handle_one_request()
+        finally:
+            elapsed_ms = int((time.time() - started) * 1000)
+            if elapsed_ms > 2000:
+                ui_log("slow ui request", path=getattr(self, "path", ""), duration_ms=elapsed_ms)
 
     def _send_json(self, code, payload):
         body = json.dumps(payload).encode("utf-8")
