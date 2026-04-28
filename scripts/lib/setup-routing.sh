@@ -115,12 +115,32 @@ is_huawei_iface() {
   return 1
 }
 
+is_modem_mgmt_iface() {
+  local iface="$1"
+
+  [[ -n "${iface}" ]] || return 1
+  ip -4 -o addr show dev "${iface}" scope global 2>/dev/null | awk '
+    {
+      split($4, cidr, "/")
+      split(cidr[1], oct, ".")
+      if (oct[1] == "192" && oct[2] == "168" && oct[4] == "100" && (oct[3] == "1" || oct[3] == "8" || (oct[3] >= 100 && oct[3] <= 199))) {
+        found=1
+      }
+    }
+    END { exit(found ? 0 : 1) }'
+}
+
+is_modem_iface() {
+  local iface="$1"
+  is_huawei_iface "${iface}" || is_modem_mgmt_iface "${iface}"
+}
+
 list_huawei_ifaces() {
   local iface seen
   declare -A seen=()
   for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}'); do
     [[ "${iface}" == "lo" ]] && continue
-    if is_huawei_iface "${iface}"; then
+    if is_modem_iface "${iface}"; then
       seen["${iface}"]=1
       echo "${iface}"
     fi
@@ -147,7 +167,7 @@ list_non_huawei_ifaces() {
   local iface
   for iface in $(ip -o link show 2>/dev/null | awk -F': ' '{print $2}'); do
     [[ "${iface}" == "lo" ]] && continue
-    if ! is_huawei_iface "${iface}"; then
+    if ! is_modem_iface "${iface}"; then
       echo "${iface}"
     fi
   done
@@ -233,25 +253,25 @@ preferred_uplink_iface() {
   local iface remembered current_default
 
   iface=$(connected_iface_by_type "ethernet")
-  if [[ -n "${iface}" && -d "/sys/class/net/${iface}" ]] && ! is_huawei_iface "${iface}"; then
+  if [[ -n "${iface}" && -d "/sys/class/net/${iface}" ]] && ! is_modem_iface "${iface}"; then
     echo "${iface}"
     return 0
   fi
 
   iface=$(connected_iface_by_type "wifi")
-  if [[ -n "${iface}" && -d "/sys/class/net/${iface}" ]] && ! is_huawei_iface "${iface}"; then
+  if [[ -n "${iface}" && -d "/sys/class/net/${iface}" ]] && ! is_modem_iface "${iface}"; then
     echo "${iface}"
     return 0
   fi
 
   remembered=$(load_preferred_uplink || true)
-  if [[ -n "${remembered}" && -d "/sys/class/net/${remembered}" ]] && ! is_huawei_iface "${remembered}" && iface_has_ipv4 "${remembered}"; then
+  if [[ -n "${remembered}" && -d "/sys/class/net/${remembered}" ]] && ! is_modem_iface "${remembered}" && iface_has_ipv4 "${remembered}"; then
     echo "${remembered}"
     return 0
   fi
 
   current_default=$(ip route show default 2>/dev/null | awk '/^default/ {for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i+1); exit }}')
-  if [[ -n "${current_default}" && -d "/sys/class/net/${current_default}" ]] && ! is_huawei_iface "${current_default}" && iface_has_ipv4 "${current_default}"; then
+  if [[ -n "${current_default}" && -d "/sys/class/net/${current_default}" ]] && ! is_modem_iface "${current_default}" && iface_has_ipv4 "${current_default}"; then
     echo "${current_default}"
     return 0
   fi

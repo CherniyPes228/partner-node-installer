@@ -94,6 +94,15 @@ proxy:
   config_path: "/etc/3proxy/3proxy.conf"
   base_port: 31000
 
+local_ui:
+  enabled: true
+  listen_addr: "127.0.0.1"
+  listen_port: ${UI_PORT:-19090}
+  static_dir: "${UI_DIR:-/opt/partner-node-ui}"
+  refresh_interval: "2s"
+  config_path: "$CONFIG_DIR/config.yaml"
+  update_helper_path: "${PARTNER_NODE_UPDATE_PATH:-/usr/local/sbin/partner-node-update.sh}"
+
 tunnel:
   relay_id: ""
   transport: "auto"

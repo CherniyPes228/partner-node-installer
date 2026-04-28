@@ -329,7 +329,7 @@ main() {
 
   log_info "Restarting services..."
   systemctl restart "$SERVICE_NAME" || log_warn "Failed to restart $SERVICE_NAME"
-  systemctl restart "$UI_SERVICE_NAME" || log_warn "Failed to restart $UI_SERVICE_NAME"
+  log_info "Local UI is served by $SERVICE_NAME; legacy $UI_SERVICE_NAME is disabled"
 
   if [[ $failed -gt 0 ]]; then
     log_warn "⚠️  $failed step(s) failed during update"
@@ -338,7 +338,7 @@ main() {
   fi
 
   log_info "Agent status: $(systemctl is-active "$SERVICE_NAME" || echo 'inactive')"
-  log_info "UI status: $(systemctl is-active "$UI_SERVICE_NAME" || echo 'inactive')"
+  log_info "UI: http://127.0.0.1:${UI_PORT}"
   log_info "Update command: ${PARTNER_NODE_UPDATE_PATH}"
 
   rm -rf "$LIB_DIR"
