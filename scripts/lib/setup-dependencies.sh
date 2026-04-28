@@ -35,6 +35,7 @@ setup_dependencies() {
         iputils-ping \
         openssh-server \
         sudo \
+        util-linux \
         modemmanager \
         usb-modeswitch \
         network-manager \
@@ -61,6 +62,7 @@ setup_dependencies() {
         iputils \
         openssh-server \
         sudo \
+        util-linux \
         ModemManager \
         usb_modeswitch \
         NetworkManager \
@@ -84,6 +86,7 @@ setup_dependencies() {
         ca-certificates \
         bind-tools \
         iputils \
+        util-linux \
         usb-modeswitch
 
       log_info "Dependencies installed"

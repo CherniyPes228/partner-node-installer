@@ -15,6 +15,7 @@ WEBUI_FW="$IMAGES_DIR/WEBUI_17.100.05.06.965_Mod1.16_V7R11_CPIO.bin"
 USBLOAD="$TOOLS_DIR/balong-usbload"
 USBLSAFE="$TOOLS_DIR/usblsafe-3372h.bin"
 PTABLE="$TOOLS_DIR/ptable-hilink.bin"
+FLASH_LOCK_FILE="${PARTNER_NODE_FLASH_LOCK:-/run/partner-node-flash.lock}"
 NM_ONLY_UDEV_RULE="/run/udev/rules.d/99-partner-node-nm-only.rules"
 NM_ONLY_USB_PORT=""
 NM_ONLY_NET_IFACE=""
@@ -54,6 +55,17 @@ need_cmd() {
 
 need_file() {
   [[ -f "$1" ]] || die "Не найден файл: $1"
+}
+
+acquire_flash_lock() {
+  local lock_dir
+  lock_dir="$(dirname "$FLASH_LOCK_FILE")"
+  mkdir -p "$lock_dir"
+  exec 200>"$FLASH_LOCK_FILE"
+  if ! flock -n 200; then
+    echo "ERROR: another modem is already flashing on this node (lock: $FLASH_LOCK_FILE)" >&2
+    exit 75
+  fi
 }
 
 init_adb_env() {
@@ -684,6 +696,7 @@ main() {
   need_cmd lsusb
   need_cmd adb
   need_cmd usb_modeswitch
+  need_cmd flock
   if (( ${#SUDO[@]} )); then
     need_cmd sudo
   fi
@@ -694,6 +707,8 @@ main() {
   need_file "$USBLOAD"
   need_file "$USBLSAFE"
   need_file "$PTABLE"
+
+  acquire_flash_lock
 
   stop_services
   flush_non_huawei_usbnet

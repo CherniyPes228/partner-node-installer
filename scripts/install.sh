@@ -165,15 +165,15 @@ install_packages() {
     apt)
       export DEBIAN_FRONTEND=noninteractive
       apt-get update -y
-      apt-get install -y ca-certificates curl git tar gzip jq systemd systemd-sysv build-essential python3 iproute2
+      apt-get install -y ca-certificates curl git tar gzip jq systemd systemd-sysv build-essential python3 iproute2 util-linux
       apt-get install -y wireguard-tools modemmanager usb-modeswitch || true
       ;;
     dnf)
-      dnf install -y ca-certificates curl git tar gzip jq systemd gcc make python3 iproute
+      dnf install -y ca-certificates curl git tar gzip jq systemd gcc make python3 iproute util-linux
       dnf install -y wireguard-tools ModemManager usb_modeswitch || true
       ;;
     yum)
-      yum install -y ca-certificates curl git tar gzip jq systemd gcc make python3 iproute
+      yum install -y ca-certificates curl git tar gzip jq systemd gcc make python3 iproute util-linux
       yum install -y wireguard-tools ModemManager usb_modeswitch || true
       ;;
   esac
