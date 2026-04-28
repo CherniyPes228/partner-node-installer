@@ -394,7 +394,7 @@ set_runtime_default_route() {
 }
 
 reconcile_source_routing() {
-  local iface local_ip prefix gateway table_id
+  local iface local_ip prefix gateway table_id third_octet old_table
 
   for iface in $(list_huawei_ifaces); do
     local_ip=$(ip -4 -o addr show dev "${iface}" scope global 2>/dev/null | awk '{print $4}' | head -n 1 | cut -d/ -f1)
@@ -402,14 +402,33 @@ reconcile_source_routing() {
 
     prefix=$(echo "${local_ip}" | awk -F. '{print $1 "." $2 "." $3}')
     gateway="${prefix}.1"
-    table_id=$(echo "${iface}" | cksum | awk '{print 1000 + ($1 % 200)}')
+    third_octet=$(echo "${local_ip}" | awk -F. '{print $3}')
+    if [[ ! "${third_octet}" =~ ^[0-9]+$ ]]; then
+      log "skip source routing iface=${iface} local_ip=${local_ip} reason=invalid_third_octet"
+      continue
+    fi
+    table_id=$((3000 + third_octet))
 
-    ip rule del from "${local_ip}/32" table "${table_id}" 2>/dev/null || true
+    while IFS= read -r old_table; do
+      [[ -n "${old_table}" && "${old_table}" =~ ^[0-9]+$ ]] || continue
+      ip route flush table "${old_table}" 2>/dev/null || true
+    done < <(ip -o rule show 2>/dev/null | awk -v src="${local_ip}" '
+      $0 ~ ("from " src "(/32)? ") {
+        for (i = 1; i <= NF; i++) {
+          if ($i == "lookup" && (i + 1) <= NF) print $(i + 1)
+        }
+      }
+    ')
+
+    while ip -o rule show 2>/dev/null | awk -v src="${local_ip}" '$0 ~ ("from " src "(/32)? ") { found = 1 } END { exit found ? 0 : 1 }'; do
+      ip rule del from "${local_ip}/32" 2>/dev/null || ip rule del from "${local_ip}" 2>/dev/null || break
+    done
     ip route flush table "${table_id}" 2>/dev/null || true
 
-    ip route add "${prefix}.0/24" dev "${iface}" src "${local_ip}" table "${table_id}" 2>/dev/null || true
-    ip route add default via "${gateway}" dev "${iface}" table "${table_id}" 2>/dev/null || true
+    ip route replace "${prefix}.0/24" dev "${iface}" src "${local_ip}" table "${table_id}" 2>/dev/null || true
+    ip route replace default via "${gateway}" dev "${iface}" table "${table_id}" 2>/dev/null || true
     ip rule add from "${local_ip}/32" table "${table_id}" priority "${table_id}" 2>/dev/null || true
+    log "source routing iface=${iface} local_ip=${local_ip} gateway=${gateway} table=${table_id}"
   done
 }
 
