@@ -181,6 +181,41 @@ cleanup_stale_non_huawei_ips() {
   done
 }
 
+cleanup_stale_source_routing_rules() {
+  local iface local_ip active_sources src table
+  active_sources=" "
+  for iface in $(list_huawei_ifaces); do
+    local_ip=$(ip -4 -o addr show dev "${iface}" scope global 2>/dev/null | awk '{print $4}' | head -n 1 | cut -d/ -f1)
+    [[ -n "${local_ip}" ]] || continue
+    active_sources="${active_sources}${local_ip} "
+  done
+
+  while read -r src table; do
+    [[ -n "${src}" ]] || continue
+    [[ "${src}" =~ ^192\.168\.[0-9]+\.100$ ]] || continue
+    if [[ "${active_sources}" == *" ${src} "* ]]; then
+      continue
+    fi
+    ip rule del from "${src}/32" 2>/dev/null || ip rule del from "${src}" 2>/dev/null || true
+    if [[ -n "${table}" && "${table}" =~ ^[0-9]+$ ]]; then
+      ip route flush table "${table}" 2>/dev/null || true
+    fi
+    log "removed stale source routing rule src=${src} table=${table:-unknown}"
+  done < <(ip -o rule show 2>/dev/null | awk '
+    {
+      src = ""; table = "";
+      for (i = 1; i <= NF; i++) {
+        if ($i == "from" && (i + 1) <= NF) {
+          src = $(i + 1);
+          sub(/\/32$/, "", src);
+        }
+        if ($i == "lookup" && (i + 1) <= NF) table = $(i + 1);
+      }
+      if (src != "") print src, table;
+    }
+  ')
+}
+
 nm_device_field() {
   local iface="$1"
   local field="$2"
@@ -437,6 +472,7 @@ main() {
 
   debounce_dispatcher
   cleanup_stale_non_huawei_ips
+  cleanup_stale_source_routing_rules
 
   for iface in $(list_huawei_ifaces); do
     ensure_modem_profile "${iface}"
