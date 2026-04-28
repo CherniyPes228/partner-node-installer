@@ -743,12 +743,31 @@ function openFlashOverlay(label, status = "queued", stage = "queued", message = 
   debugFlashOverlay("openFlashOverlay", { label, status, stage, key, message })
 }
 
-function closeFlashOverlay() {
+function isReadyFlashNoticeTarget(notice, target) {
+  if (!notice || !isTerminalFlashJob(notice) || !target) return false
+  const state = String(target.state || "").trim().toLowerCase()
+  const provisionStatus = String(target.provision_status || "").trim().toLowerCase()
+  return state === "ready" && provisionStatus === "ready"
+}
+
+async function dismissFlashNoticeOnNode() {
+  try {
+    await fetch("/api/flash-notice/dismiss", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    })
+  } catch {
+  }
+}
+
+async function closeFlashOverlay() {
   const noticeKey = currentFlashStorageKey(flashNotice.value)
   const overlayKey = String(flashOverlay.value.key || "").trim()
   const noticeTarget = flashJobTargetModem(flashNotice.value)
   const noticeOverlayKey = flashOverlayKeyForJob(flashNotice.value, noticeTarget)
-  if (flashNotice.value && isTerminalFlashJob(flashNotice.value) && noticeKey && (!overlayKey || overlayKey === noticeOverlayKey)) {
+  const shouldDismissNotice = Boolean(flashNotice.value && isTerminalFlashJob(flashNotice.value) && (!overlayKey || overlayKey === noticeOverlayKey))
+  if (shouldDismissNotice && noticeKey) {
     storeDismissedFlashJobKey(noticeKey)
     if (noticeOverlayKey) {
       storeDismissedFlashOverlayKey(noticeOverlayKey)
@@ -757,6 +776,10 @@ function closeFlashOverlay() {
   forgetActiveFlashKey(overlayKey)
   debugFlashOverlay("closeFlashOverlay", { notice_key: noticeKey, notice_overlay_key: noticeOverlayKey, overlay_key: overlayKey })
   flashOverlay.value = { ...flashOverlay.value, open: false }
+  if (shouldDismissNotice) {
+    await dismissFlashNoticeOnNode()
+    await loadOverview(false)
+  }
 }
 
 function syncFlashOverlayFromOverview() {
@@ -823,6 +846,15 @@ function syncFlashOverlayFromOverview() {
   if (flashNotice.value && isTerminalFlashJob(flashNotice.value)) {
     const target = flashJobTargetModem(flashNotice.value)
     const noticeOverlayKey = flashOverlayKeyForJob(flashNotice.value, target)
+    if (isReadyFlashNoticeTarget(flashNotice.value, target) && !hasSeenActiveFlashKey(noticeOverlayKey)) {
+      if (flashOverlay.value.open) {
+        debugFlashOverlay("sync:close-ready-terminal-notice", { notice_key: noticeOverlayKey })
+        flashOverlay.value = { ...flashOverlay.value, open: false }
+      } else {
+        debugFlashOverlay("sync:ignore-ready-terminal-notice", { notice_key: noticeOverlayKey })
+      }
+      return
+    }
     if (!hasSeenActiveFlashKey(noticeOverlayKey) && (!overlayKey || overlayKey !== noticeOverlayKey)) {
       debugFlashOverlay("sync:ignore-terminal-notice-without-active-session", { notice_key: noticeOverlayKey })
       return
