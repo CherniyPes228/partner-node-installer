@@ -77,6 +77,8 @@ HILINK_PROBE_TIMEOUT = float(os.environ.get("PARTNER_HILINK_PROBE_TIMEOUT", "1.5
 HILINK_INFO_CACHE_TTL = float(os.environ.get("PARTNER_HILINK_INFO_CACHE_TTL", "15"))
 HILINK_INFO_STALE_TTL = float(os.environ.get("PARTNER_HILINK_INFO_STALE_TTL", "30"))
 OVERVIEW_CACHE_TTL = float(os.environ.get("PARTNER_OVERVIEW_CACHE_TTL", "3"))
+CLIENT_SOCKET_TIMEOUT = float(os.environ.get("PARTNER_UI_CLIENT_TIMEOUT", "15"))
+VERBOSE_UI_LOGS = os.environ.get("PARTNER_UI_VERBOSE_LOGS", "").strip().lower() in ("1", "true", "yes")
 LOCAL_HILINK_IFACE_PREFIXES = ("enx", "enp", "usb", "wwan", "eth")
 
 ALLOWED = {
@@ -108,6 +110,12 @@ LAST_ALIAS_SIGNATURE = ""
 
 
 def ui_log(message, **fields):
+    if not VERBOSE_UI_LOGS and message in (
+        "overview cache hit",
+        "overview cache stale; scheduling refresh",
+        "overview refresh complete",
+    ):
+        return
     parts = [f"[partner-node-ui] {message}"]
     for key, value in fields.items():
         parts.append(f"{key}={value}")
@@ -1996,7 +2004,27 @@ def perform_local_speedtest(node_id, modem_id, bytes_count, target_url):
     }
 
 
+class LocalUIHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+    request_queue_size = 64
+
+
 class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.0"
+
+    def setup(self):
+        super().setup()
+        try:
+            self.connection.settimeout(CLIENT_SOCKET_TIMEOUT)
+        except Exception:
+            pass
+
+    def end_headers(self):
+        self.send_header("Connection", "close")
+        super().end_headers()
+        self.close_connection = True
+
     def _send_json(self, code, payload):
         body = json.dumps(payload).encode("utf-8")
         self.send_response(code)
@@ -2272,7 +2300,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     ensure_alias_redirect()
     schedule_overview_refresh()
-    server = ThreadingHTTPServer((LISTEN_ADDR, LISTEN_PORT), Handler)
+    server = LocalUIHTTPServer((LISTEN_ADDR, LISTEN_PORT), Handler)
     server.serve_forever()
 PY
 
