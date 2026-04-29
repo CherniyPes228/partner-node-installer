@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import {
   Activity,
   BadgeCheck,
@@ -24,7 +24,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import { htmlLangForLocale, isRTLLocale, languageOptions, translateText } from "@/i18n"
 
+const LANGUAGE_STORAGE_KEY = "partner-node.ui.language"
 const overview = ref(null)
 const loading = ref(false)
 const refreshError = ref("")
@@ -77,6 +79,97 @@ const speedTestTargets = [
   { value: "http://cachefly.cachefly.net/1mb.test", label: "CacheFly 1 MB (HTTP)" },
   { value: "custom", label: "Custom URL" },
 ]
+
+function loadPreferredLanguage() {
+  try {
+    const stored = String(window.localStorage.getItem(LANGUAGE_STORAGE_KEY) || "").trim()
+    if (languageOptions.some((item) => item.code === stored)) return stored
+    const browserLanguage = String(window.navigator.language || "").toLowerCase()
+    if (browserLanguage.startsWith("es")) return "es"
+    if (browserLanguage.startsWith("zh")) return "zh_cn"
+    if (browserLanguage.startsWith("ar")) return "ar"
+    if (browserLanguage.startsWith("fr")) return "fr"
+    if (browserLanguage.startsWith("de")) return "de"
+    if (browserLanguage.startsWith("tr")) return "tr"
+    if (browserLanguage.startsWith("it")) return "it"
+    if (browserLanguage.startsWith("pl")) return "pl"
+    if (browserLanguage.startsWith("vi")) return "vi"
+    if (browserLanguage.startsWith("ja")) return "ja"
+    if (browserLanguage.startsWith("pt")) return "pt_br"
+    if (browserLanguage.startsWith("en-us")) return "en_us"
+  } catch {
+  }
+  return "en_gb"
+}
+
+const currentLocale = ref(loadPreferredLanguage())
+const activeLanguage = computed(() => languageOptions.find((item) => item.code === currentLocale.value) || languageOptions[0])
+const originalTextByNode = new WeakMap()
+let i18nObserver = null
+let i18nQueued = false
+
+function localizeTextNodeValue(rawText) {
+  const raw = String(rawText || "")
+  const leading = raw.match(/^\s*/)?.[0] || ""
+  const trailing = raw.match(/\s*$/)?.[0] || ""
+  const normalized = raw.replace(/\s+/g, " ").trim()
+  if (!normalized) return raw
+  const translated = translateText(currentLocale.value, normalized)
+  if (!translated || translated === normalized) return raw
+  return `${leading}${translated}${trailing}`
+}
+
+function shouldSkipI18nTextNode(node) {
+  const parent = node?.parentElement
+  if (!parent) return true
+  return Boolean(parent.closest("script,style,textarea,input,pre,code,.font-mono,[data-i18n-skip]"))
+}
+
+function translateStaticText(root = document.getElementById("app")) {
+  if (!root) return
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT)
+  let node = walker.nextNode()
+  while (node) {
+    if (!shouldSkipI18nTextNode(node)) {
+      const current = node.nodeValue || ""
+      let original = originalTextByNode.get(node)
+      if (!original) {
+        original = current
+        originalTextByNode.set(node, original)
+      } else {
+        const expected = localizeTextNodeValue(original)
+        if (current !== original && current !== expected) {
+          original = current
+          originalTextByNode.set(node, original)
+        }
+      }
+      const nextValue = currentLocale.value === "en_gb" || currentLocale.value === "en_us"
+        ? original
+        : localizeTextNodeValue(original)
+      if (node.nodeValue !== nextValue) node.nodeValue = nextValue
+    }
+    node = walker.nextNode()
+  }
+}
+
+function scheduleI18nPass() {
+  if (i18nQueued || typeof window === "undefined") return
+  i18nQueued = true
+  window.requestAnimationFrame(() => {
+    i18nQueued = false
+    translateStaticText()
+  })
+}
+
+function applyLanguageSettings(locale) {
+  try {
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, locale)
+  } catch {
+  }
+  document.documentElement.lang = htmlLangForLocale(locale)
+  document.documentElement.dir = isRTLLocale(locale) ? "rtl" : "ltr"
+  scheduleI18nPass()
+}
 
 let refreshTimer = null
 let localOverviewTimer = null
@@ -1346,12 +1439,25 @@ function quickAction(type) { sendCommand(type, "quick") }
 watch(selectedNode, () => { if (!filteredModems.value.some((item) => item.id === selectedModem.value)) selectedModem.value = "all" })
 watch(activeTab, (value) => {
   if (value === "modems") loadModemBilling()
+  nextTick(scheduleI18nPass)
 })
 watch([modems, overview], () => { syncFlashOverlayFromOverview() }, { deep: true })
+watch(currentLocale, (locale) => {
+  applyLanguageSettings(locale)
+})
+watch([overview, modemBilling, modemRegistry, eventFeed, flashOverlay], () => {
+  nextTick(scheduleI18nPass)
+}, { deep: true })
 onMounted(() => {
+  applyLanguageSettings(currentLocale.value)
   loadOverview()
   loadFlashSettings()
   if (activeTab.value === "modems") loadModemBilling()
+  i18nObserver = new MutationObserver(() => scheduleI18nPass())
+  const appRoot = document.getElementById("app")
+  if (appRoot) {
+    i18nObserver.observe(appRoot, { childList: true, subtree: true, characterData: true })
+  }
   localOverviewTimer = window.setInterval(() => {
     loadOverview(false)
   }, 5000)
@@ -1368,6 +1474,10 @@ onBeforeUnmount(() => {
   if (billingTimer) {
     window.clearInterval(billingTimer)
     billingTimer = null
+  }
+  if (i18nObserver) {
+    i18nObserver.disconnect()
+    i18nObserver = null
   }
 })
 </script>
@@ -1387,6 +1497,21 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div class="grid gap-3 sm:grid-cols-2 xl:min-w-[520px]">
+            <div class="rounded-[26px] border border-border/70 bg-card/80 p-4 sm:col-span-2">
+              <label class="text-xs uppercase tracking-[0.18em] text-muted-foreground" for="language-select">Language</label>
+              <select
+                id="language-select"
+                v-model="currentLocale"
+                class="mt-2 w-full rounded-2xl border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+                dir="ltr"
+                data-i18n-skip
+              >
+                <option v-for="language in languageOptions" :key="language.code" :value="language.code">
+                  {{ language.flag }} {{ language.label }}
+                </option>
+              </select>
+              <div class="mt-2 text-xs text-muted-foreground" data-i18n-skip>{{ activeLanguage.flag }} {{ activeLanguage.label }}</div>
+            </div>
             <div class="rounded-[26px] border border-border/70 bg-card/80 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Partner Key</div><div class="mt-2 font-mono text-sm">{{ overview?.partner_key || "-" }}</div></div>
             <div class="rounded-[26px] border border-border/70 bg-card/80 p-4"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Main Server</div><div class="mt-2 break-all font-mono text-sm">{{ overview?.main_server || "-" }}</div></div>
             <div class="rounded-[26px] border border-border/70 bg-card/80 p-4"><div class="flex items-center justify-between gap-3"><div class="text-xs uppercase tracking-[0.18em] text-muted-foreground">Refresh Mode</div><Badge :variant="tone(realtimeState)" class="rounded-full capitalize">{{ realtimeState }}</Badge></div><div class="mt-2 text-sm text-muted-foreground">{{ realtimeNote }}</div></div>
